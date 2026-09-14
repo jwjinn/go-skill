@@ -244,5 +244,76 @@ printf '%s' "$out" | grep -q '다른 세션의 계획일 수 있다' && ok "⚠ 
 printf '%s' "$out" | grep -q '경로 ①' && ng "남의 계획을 채택하라고 함" "$out" || ok "채택하라고 하지 않는다"
 cleanup
 
+# ── ⭐ 테스트 에이전트 축(2026-09-15) ────────────────────────────────────────
+#
+# 이 축은 **차단하지 않는다**(묻지 않고 지나가면 tester.sh 가 rc 70 으로 닫히므로 안전한 쪽으로
+# 실패한다). 그래서 재는 것은 「알리는가」이고, 대조군은 **조용해야 하는 조건**이다.
+echo "=== ⭐ 테스트 에이전트 축 — ask 인데 Q-T 가 없으면 알린다"
+
+tester_stub() { # tester_stub <MODE> — go-tester 를 흉내 내는 최소 구조
+  td="$T/fake-skills/go-tester/tester"
+  mkdir -p "$td"
+  printf '%s\n' "print('TESTER_MODE=$1')" > "$td/_config.py"
+  printf '%s\n' "print('TESTER_ENABLED=0')" >> "$td/_config.py"
+  HOME_ORIG="$HOME"
+  export HOME="$T/fakehome"
+  mkdir -p "$HOME/.claude/skills"
+  ln -sfn "$T/fake-skills/go-tester" "$HOME/.claude/skills/go-tester"
+}
+tester_unstub() { [ -n "${HOME_ORIG:-}" ] && export HOME="$HOME_ORIG"; }
+
+setup
+printf -- '# 계획\n\n## 목표 계약\n원 요청: "x"\n\n## 결정 필요(승인 전)\n- [x] Q1 [질문] 무엇 — 답: 그것\n\n## 병렬 배치\n단독 — 작다\n\n## P0\n- [ ] a\n- [ ] b\n' \
+  > "$T/.claude/plan-draft.md"
+tester_stub ask
+out=$(run "/go")
+tester_unstub
+printf '%s' "$out" | grep -q 'Q-T' && ok "ask 인데 Q-T 가 없으면 지목한다" || ng "Q-T 미지목" "$out"
+printf '%s' "$out" | grep -q '그대로.*plan-active' && ok "⭐ 대조군 — 그래도 이관 지시는 나온다(차단이 아니다)" || ng "이관 지시가 사라졌다" "$out"
+cleanup
+
+echo "=== 대조군 — Q-T 가 있으면 조용하다(오탐 0)"
+setup
+printf -- '# 계획\n\n## 목표 계약\n원 요청: "x"\n\n## 결정 필요(승인 전)\n- [x] Q-T [질문] 테스트 에이전트(로컬 모델) 사용 — 답: 쓴다\n\n## 병렬 배치\n단독 — 작다\n\n## P0\n- [ ] a\n- [ ] b\n' \
+  > "$T/.claude/plan-draft.md"
+tester_stub ask
+out=$(run "/go")
+tester_unstub
+printf '%s' "$out" | grep -q '테스트 에이전트 항목(Q-T)이 초안에 있다' && ok "Q-T 가 있으면 확인만 한다" || ng "Q-T 인식 실패" "$out"
+printf '%s' "$out" | grep -q 'Q-T 가 없다' && ng "있는데 없다고 함" "$out" || ok "⭐ 없다고 말하지 않는다"
+cleanup
+
+echo "=== 대조군 — on/off 로 고정된 프로젝트는 묻지 않는다"
+setup
+printf -- '# 계획\n\n## 목표 계약\n원 요청: "x"\n\n## 결정 필요(승인 전)\n없음 — 단순\n\n## 병렬 배치\n단독\n\n## P0\n- [ ] a\n- [ ] b\n' \
+  > "$T/.claude/plan-draft.md"
+tester_stub off
+out=$(run "/go")
+tester_unstub
+printf '%s' "$out" | grep -q 'Q-T 가 없다' && ng "off 인데 물으라고 함" "$out" || ok "off 면 Q-T 를 요구하지 않는다"
+cleanup
+
+echo "=== ⭐⭐ 대조군 — go-tester 가 **없으면** 이 축이 통째로 조용하다"
+setup
+printf -- '# 계획\n\n## 목표 계약\n원 요청: "x"\n\n## 결정 필요(승인 전)\n없음\n\n## 병렬 배치\n단독\n\n## P0\n- [ ] a\n- [ ] b\n' \
+  > "$T/.claude/plan-draft.md"
+HOME_ORIG="$HOME"; export HOME="$T/emptyhome"; mkdir -p "$HOME/.claude/skills"
+out=$(run "/go")
+export HOME="$HOME_ORIG"
+printf '%s' "$out" | grep -qE 'Q-T|테스트 에이전트' && ng "go-tester 없는데 말한다" "$out" || ok "설치 안 됐으면 조용하다"
+cleanup
+
+echo "=== 옵트인 잔재 — 다른 계획의 기록이 남아 있으면 알린다"
+setup
+printf -- '# 계획\n\n## 목표 계약\n원 요청: "x"\n\n## 결정 필요(승인 전)\n- [x] Q-T [질문] 테스트 에이전트 — 답: 쓴다\n\n## 병렬 배치\n단독\n\n## P0\n- [ ] a\n- [ ] b\n' \
+  > "$T/.claude/plan-draft.md"
+mkdir -p "$T/.claude/tester"
+printf '{"answer":"use","plan_file":"/elsewhere/plan-active.md"}\n' > "$T/.claude/tester/opt-in.json"
+tester_stub ask
+out=$(run "/go")
+tester_unstub
+printf '%s' "$out" | grep -q '다른 계획' && ok "다른 계획의 옵트인을 지목한다" || ng "잔재 미지목" "$out"
+cleanup
+
 printf '\npass=%s fail=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

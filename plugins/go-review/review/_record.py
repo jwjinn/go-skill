@@ -85,6 +85,10 @@ def parse_tokens(spec, round_dir):
     res = dict((r, out.get(r)) for r in REVIEWERS)
     if "review-merger" in out:
         res["review-merger"] = out["review-merger"]
+    # ⭐ 리뷰어가 아닌 소비자도 한 자리 받는다 — `tester` 는 테스트를 위임한 로컬 모델의 토큰이다.
+    #   리뷰 토큰과 **섞지 않는다**(절제 계산은 리뷰어 자리만 본다). 없으면 키가 생기지 않는다.
+    if "tester" in out:
+        res["tester"] = out["tester"]
     return res
 
 

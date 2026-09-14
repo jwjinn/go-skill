@@ -131,6 +131,47 @@ if [ "$fresh" -eq 1 ]; then
     printf '⚠ 초안에 「## 결정 필요(승인 전)」 절이 없다 — 결정 후보로 보이는 줄 **%s건**. go.md §0-c: 초안을 스캔해 사용자 질문·선택·선행 산출물을 그 절로 모아라. 물을 것이 정말 없으면 절을 만들고 「없음」이라 적어라(없다는 것도 판정이다).\n' "$cand"
   fi
 
+  # ── ⭐ 테스트 에이전트 축(2026-09-15) ──────────────────────────────────────
+  #
+  # 사용자 지시: 「default 는 로컬 모델을 안 쓰는 거고 … 명시적으로 쓴다고 하면 쓴다」
+  #              「플랜을 만들고 플랜을 돌릴때 명시적으로 물어보는 프로세스가 있어야겠는데」
+  #
+  # ⚠ 이 축은 **차단하지 않는다.** 묻지 않고 지나가면 tester.sh 가 rc 70 으로 닫히므로
+  #   안전한 쪽으로 실패한다. 알릴 가치가 있는 것은 「물어야 하는데 항목이 없다」와
+  #   「남의 계획 옵트인이 남아 있다」 둘이다.
+  t_root="$(dirname -- "$base")"
+  tt="$HOME/.claude/skills/go-tester"
+  [ -d "$tt" ] || tt=""
+  if [ -n "$tt" ] && [ -f "$tt/tester/_config.py" ]; then
+    t_mode=$(CLAUDE_PROJECT_DIR="$t_root" python3 "$tt/tester/_config.py" 2>/dev/null | grep -E '^TESTER_MODE=' | head -1 | cut -d= -f2- | tr -d "'")
+    case "$t_mode" in
+      ask)
+        if grep -qE '^[-*][[:space:]]*\[[ xX]\][[:space:]]*Q-T|Q-T[[:space:]]*\[질문\]|테스트 에이전트' "$draft" 2>/dev/null; then
+          printf '✅ 테스트 에이전트 항목(Q-T)이 초안에 있다 — `/go` 가 §0-d 에서 heartbeat 를 다시 돌리고 재확인한다.\n'
+        else
+          printf '⚠ go-tester 가 `ask` 인데 초안에 **테스트 에이전트 항목(Q-T)이 없다** — plan.md §6-b 의 Q-T 를 보라.\n'
+          printf '   항목이 없으면 `/go` 가 §0-d 에서 처음 묻게 되고, 그 자리가 곧 착수 중 정지다.\n'
+          printf '   물을 필요가 없다고 판단했으면 그 사실을 한 줄로 적어라(안 적은 것과 다르다).\n'
+        fi
+        ;;
+      on|off)
+        printf '✅ go-tester 는 이 프로젝트에서 `%s` 로 고정돼 있다 — 묻지 않는다(사람이 이미 정했다).\n' "$t_mode"
+        ;;
+    esac
+    # 옵트인 잔재 — 다른 계획의 기록이 남아 있으면 알린다.
+    optin="$base/tester/opt-in.json"
+    if [ -f "$optin" ]; then
+      rec=$(python3 -c 'import io,json,sys
+try: print((json.load(io.open(sys.argv[1],encoding="utf-8")).get("plan_file") or ""))
+except Exception: print("")' "$optin" 2>/dev/null)
+      if [ -n "$rec" ] && [ "$rec" != "$base/plan-active.md" ]; then
+        printf '⚠ 옵트인 기록이 **다른 계획**을 가리킨다(%s) — 이 계획에는 안 먹는다(rc 70). 새로 물어 새로 써라.\n' "$rec"
+      else
+        printf '⚠ 옵트인 기록이 이미 있다(%s) — 앞 계획의 잔재면 지워라. 자원 회수(go.md §3-c C3)가 그 일이다.\n' "$optin"
+      fi
+    fi
+  fi
+
   printf '이 초안을 **그대로** plan-active.md 로 옮겨라. 여기서 계획을 다시 쓰지 마라 — 승인된 것은 이 초안이다.\n'
   exit 0
 fi
