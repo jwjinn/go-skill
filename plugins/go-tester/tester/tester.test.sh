@@ -144,6 +144,17 @@ R="$T/r-b3"; new_repo "$R"; make_mock "$(good_result notred)"
 rc=$(run_with_mocks "$R" --mode full)
 [ "$rc" = "67" ] && ok "B3 대조군 미발화 → rc 67" || no "B3 대조군 미발화 → rc 67" "실제 rc=$rc"
 
+R="$T/r-b1u"; new_repo "$R"
+make_mock 'Failed to authenticate. API Error: 403 litellm.APIError: OpenAIException - {"error":"요청이 보안 정책(jailbreak/prompt-injection)에 의해 차단되었습니다.","by":"fabrix-guard"}'
+rc=$(run_with_mocks "$R")
+[ "$rc" = "70" ] && ok "B1u ⭐ 업스트림 거부(403 가드) → rc 70 (65 가 아니다)" || no "B1u 업스트림 거부 → rc 70" "실제 rc=$rc"
+r1u=$(reason_of)
+case "$r1u" in *upstream_rejected*) ok "B1u-b 사유가 업스트림을 지목한다(지시서 탓으로 읽히지 않는다)" ;; *) no "B1u-b 사유가 업스트림을 지목한다" "사유=$r1u" ;; esac
+
+R="$T/r-b1v"; new_repo "$R"; make_mock '이건 그냥 JSON 이 아닌 산문이다'
+rc=$(run_with_mocks "$R")
+[ "$rc" = "65" ] && ok "B1v ⭐ 대조군 — 업스트림 신호가 **없는** 형식 오류는 그대로 rc 65" || no "B1v 형식 오류는 rc 65" "실제 rc=$rc"
+
 R="$T/r-b4"; new_repo "$R"; make_mock "$(good_result red)" 'echo "// 소스를 고쳤다" >> "$PWD/x.go"'
 rc=$(run_with_mocks "$R" --mode full)
 [ "$rc" = "66" ] && ok "B4 소스 파일 수정 → rc 66" || no "B4 소스 파일 수정 → rc 66" "실제 rc=$rc"

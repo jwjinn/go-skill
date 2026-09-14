@@ -28,7 +28,9 @@
 #   66  테스트 파일 밖을 고쳤다
 #   67  대조군 누락(mode=full 인데 발화한 대조군이 0건)
 #   68  부모 계획·리뷰 파일이 훼손됐다(원본을 복원했다)
-#   70  쓸 수 없다 — 꺼졌거나·옵트인 없음·heartbeat 불가·슬롯 대기 초과
+#   70  쓸 수 없다 — 꺼졌거나·옵트인 없음·heartbeat 불가·슬롯 대기 초과·**업스트림 거부**
+#       (⭐ heartbeat 는 통과했는데 본 작업이 403/401/429 로 막히는 경우가 실재한다 —
+#        게이트웨이 가드가 긴 요청만 차단하는 조건을 2026-09-15 에 실측했다)
 set -u
 
 SELF="$(cd "$(dirname "$0")" && pwd)"
@@ -254,8 +256,20 @@ json.dump(inner, io.open(out, "w", encoding="utf-8"), ensure_ascii=False, indent
 PYPARSE
 PARSE_RC=$?
 if [ "$PARSE_RC" -ne 0 ]; then
-  why="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("_error",""))' "$OUT" 2>/dev/null)"
-  fail_json 65 "invalid_output: ${why:-산출을 읽지 못했다} (자식 rc=$CHILD_RC · $(tail -1 "$CHILD_ERR" 2>/dev/null | head -c 160))"
+  why="$(python3 -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+e=d.get("_error","")
+raw=(d.get("_raw") or "").strip().replace(chr(10)," ")
+print(e + (" | 자식이 낸 것: " + raw[:220] if raw else ""))' "$OUT" 2>/dev/null)"
+  # ⭐ 업스트림이 거부한 것과 모델이 형식을 못 지킨 것을 **가른다.** 고칠 곳이 다르다:
+  #   앞은 엔드포인트·정책(사람이 판단) · 뒤는 지시서(구현자가 고친다).
+  #   실측(2026-09-15): 이 클러스터 게이트웨이의 가드가 특정 레포 문맥의 요청을
+  #   403 jailbreak 로 차단했고, heartbeat(짧은 ping)는 그대로 통과했다.
+  case "$why" in
+    *"fabrix-guard"*|*"보안 정책"*|*"403"*|*"401"*|*"AuthenticationError"*|*"rate_limit"*|*"429"*|*"Failed to authenticate"*)
+      fail_json 70 "upstream_rejected: ${why} (heartbeat 는 통과했지만 본 작업이 거부됐다 — 엔드포인트·정책 문제이지 지시서 문제가 아니다 · 보존: $GUARD_DIR)" ;;
+  esac
+  fail_json 65 "invalid_output: ${why:-산출을 읽지 못했다} (자식 rc=$CHILD_RC · 보존: $GUARD_DIR)"
 fi
 
 # ── ⑨ 스키마·대조군·쓰기 범위 검증 ──────────────────────────────────────────
