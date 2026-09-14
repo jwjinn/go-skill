@@ -8,7 +8,11 @@
 ```
 /plugin marketplace add jwjinn/go-skill
 /plugin install go-review@jwjinn-go-skill
+/plugin install go-tester@jwjinn-go-skill    # 선택 — 테스트를 로컬 모델에 위임한다
 ```
+
+`go-tester` 는 **기본이 꺼져 있다.** 계획을 만들 때와 돌릴 때 사람이 두 번 답해야 켜지고,
+답하지 않으면 호출이 0회다. 자세한 것은 [plugins/go-tester/README.md](plugins/go-tester/README.md).
 
 설치 직후 한 줄로 이 기계에서 실제로 도는지 확인한다(중요 — 아래 [의존성](#의존성--설치됐다와-돌아간다는-다르다) 절):
 

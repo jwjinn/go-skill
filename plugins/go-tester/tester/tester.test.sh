@@ -208,8 +208,37 @@ fi
 
 echo
 echo "── F. 키가 코드에 없는가 ───────────────────────────────────────────"
-leak=$(grep -rn 'fbx_[A-Za-z0-9]' /Users/woojin/개발/go-skill 2>/dev/null | grep -v '\.git/' | wc -l | tr -d ' ')
-[ "$leak" = "0" ] && ok "F1 go-skill 에 API 키 문자열 0건" || no "F1 go-skill 에 API 키 문자열 0건" "$leak 건 발견"
+# ⚠ 접두사 패턴(`fbx_…`)으로 세지 마라 — 키를 **다루는** 코드가 그 접두사를 정상적으로 쓴다.
+#   실측: fabrix 레포에 33건이 있었고 전부 키 파싱 로직과 테스트 픽스처였다(실제 키는 0건).
+#   접두사를 세면 그 레포에서 이 검사는 영영 붉고, 붉은 검사는 곧 꺼진다.
+#   ⇒ **실제 키 값**이 어딘가에 적혔는지만 본다. 값은 키 파일에서 읽어 비교하고 출력하지 않는다.
+ENVF="$HOME/.config/go-skill/tester.env"
+if [ -f "$ENVF" ]; then
+  realkey=$(grep -m1 '^GO_TESTER_API_KEY=' "$ENVF" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' \r\n')
+  if [ -n "$realkey" ]; then
+    roots="/Users/woojin/개발/go-skill"
+    [ -n "${CLAUDE_PROJECT_DIR:-}" ] && roots="$roots $CLAUDE_PROJECT_DIR"
+    leak=0
+    for r in $roots; do
+      n=$(grep -rlF "$realkey" "$r" 2>/dev/null | grep -v '/\.git/' | wc -l | tr -d ' ')
+      leak=$((leak + n))
+    done
+    [ "$leak" = "0" ] && ok "F1 ⭐ **실제 키 값**이 레포에 0건(접두사가 아니라 값으로 센다)" \
+                      || no "F1 실제 키 값이 레포에 있다" "$leak 개 파일"
+  else
+    skip "F1 키 파일에 GO_TESTER_API_KEY 가 없어 값 대조를 못 했다(미검사이지 통과가 아니다)"
+  fi
+else
+  skip "F1 키 파일이 없어 값 대조를 못 했다(미검사이지 통과가 아니다)"
+fi
+# 대조군 — 검사기가 살아 있는가: 임시 파일에 키를 넣으면 잡혀야 한다.
+if [ -f "$ENVF" ] && [ -n "${realkey:-}" ]; then
+  probe_dir="$T/leakprobe"; mkdir -p "$probe_dir"
+  printf 'key=%s\n' "$realkey" > "$probe_dir/leak.txt"
+  n=$(grep -rlF "$realkey" "$probe_dir" 2>/dev/null | wc -l | tr -d ' ')
+  [ "$n" = "1" ] && ok "F2 ⭐ 대조군 — 키를 일부러 심으면 탐지기가 잡는다" || no "F2 대조군 — 심은 키를 못 잡는다"
+  rm -rf "$probe_dir"
+fi
 
 echo
 echo "── G. 대조군 스크립트 ──────────────────────────────────────────────"

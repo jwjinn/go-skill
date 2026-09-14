@@ -8,7 +8,7 @@
     {
       "name": "go-review",
       "source": "./plugins/go-review",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "description": "계획 승인부터 교차 리뷰까지를 훅으로 집행한다. /plan 이 계획을 파일로 남기고, /go 가 승인하면 목표 계약이 매 턴 문맥에 다시 주입되며, 미완료 단계가 남은 채로는 턴이 끝나지 않는다(Stop 게이트 3축). /review-loop 은 문맥이 서로 다른 리뷰어를 병렬로 띄우고 별도 병합자가 검증·기각한다. 설치 직후 `scripts/deps-check.sh` 가 이 기계에서 실제로 도는지 개수로 말한다 — jq 가 없으면 게이트가 붙어 있는 채로 아무것도 보지 않기 때문이다. 게이트 자신에 14스위트 402검사.",
       "author": {
         "name": "jwjinn"
