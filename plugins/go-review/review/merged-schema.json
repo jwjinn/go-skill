@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "병합자 산출의 정본 계약. ⭐ 리뷰어 계약(finding-schema.json)과 **모양이 다르다** — 리뷰어는 발견 목록을 내고 병합자는 **판정된 버킷**을 낸다. 둘을 한 파일로 합치려 하지 마라. codex 병합자는 이 파일을 --output-schema 로 강제받고(2026-09-02 기본 preset P2), Claude 병합자는 역할 정본(.claude/agents/review-merger.md)의 같은 모양을 프롬프트로 요구받는다. ⚠ OpenAI structured outputs 규약: 모든 필드 required · additionalProperties:false. 「없음」은 빈 배열/빈 문자열로 표현하고 필드를 빼지 마라. ⚠⚠ 이 파일을 고치면 역할 정본 §산출 블록도 같은 커밋에서 고쳐라 — 같은 사실이 두 곳에 있고 어긋나면 병합자가 스키마를 못 맞춘다.",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scope_verdict", "scope_note", "must_fix", "consider", "pre_existing",
+               "rejected", "coverage_gap", "claims_contradicted",
+               "agreement_note", "merge_note"],
+  "properties": {
+    "scope_verdict": {
+      "type": "string",
+      "enum": ["on-goal", "drifted", "incomplete", "cannot-judge"],
+      "description": "목표 계약 대비 판정. ⚠ cannot-judge 를 도피처로 쓰지 마라 — 판정 재료가 없을 때만이고 scope_note 에 무엇이 없었는지 적어라."
+    },
+    "scope_note": {"type": "string", "description": "판정 근거. drifted·incomplete 면 어느 항목인지 지목."},
+
+    "must_fix": {
+      "type": "array",
+      "description": "⭐ 전부 만족해야 한다: severity ∈ {blocker,major} ∧ CONFIRMED ∧ introduced_by_this_change ∧ (단일 계열 단독 발견이면 직접 코드를 열어 확인). 하나라도 못 채우면 consider 다.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "file", "line", "summary", "failure_scenario",
+                     "suggested_fix", "reviewers", "verdict", "verify_note"],
+        "properties": {
+          "severity": {"type": "string", "enum": ["blocker", "major"]},
+          "file": {"type": "string"},
+          "line": {"type": ["integer", "null"], "description": "1-기반 줄 번호. ⚠ **모르면 0 또는 null** — 둘은 같은 뜻이고 모든 소비자가 동일하게 다뤄야 한다(리뷰어는 finding-schema 규약상 0 을 내고 병합자는 null 을 내기도 한다). 2026-09-02 에 _dedup.py 가 `isinstance(0,int)` 로 0 을 실제 줄로 읽어 **가짜 합의를 만들었다** — 그 등가성은 dedup.test.sh 의 ①②가 지킨다."},
+          "summary": {"type": "string"},
+          "failure_scenario": {"type": "string", "description": "구체적 입력·상태 → 잘못된 출력. 못 쓰면 결함이 아니라 취향이다."},
+          "suggested_fix": {"type": "string"},
+          "reviewers": {"type": "array", "items": {"type": "string"}},
+          "verdict": {"type": "string", "enum": ["CONFIRMED"]},
+          "verify_note": {"type": "string", "description": "⭐ 네가 코드를 열어 확인한 내용. 「확인했다」로 끝내지 말고 무엇을 봤는지 적어라(줄 번호·실제 값)."}
+        }
+      }
+    },
+
+    "consider": {
+      "type": "array",
+      "description": "타당하지만 must_fix 기준을 못 채운 것. ⭐ nit·minor 는 확인됐어도 여기다 — severity 가 기준의 일부다.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "file", "line", "summary", "reviewers", "verdict", "why_not_must_fix"],
+        "properties": {
+          "severity": {"type": "string", "enum": ["blocker", "major", "minor", "nit"]},
+          "file": {"type": "string"},
+          "line": {"type": ["integer", "null"], "description": "1-기반 줄 번호. ⚠ **모르면 0 또는 null** — 둘은 같은 뜻이고 모든 소비자가 동일하게 다뤄야 한다(리뷰어는 finding-schema 규약상 0 을 내고 병합자는 null 을 내기도 한다). 2026-09-02 에 _dedup.py 가 `isinstance(0,int)` 로 0 을 실제 줄로 읽어 **가짜 합의를 만들었다** — 그 등가성은 dedup.test.sh 의 ①②가 지킨다."},
+          "summary": {"type": "string"},
+          "reviewers": {"type": "array", "items": {"type": "string"}},
+          "verdict": {"type": "string", "enum": ["CONFIRMED", "PLAUSIBLE"]},
+          "why_not_must_fix": {"type": "string", "description": "⚠ 「확인 못 했다」와 「확인했는데 severity 가 낮다」는 다른 답이다. 어느 쪽인지 밝혀라."}
+        }
+      }
+    },
+
+    "pre_existing": {
+      "type": "array",
+      "description": "실재하지만 이 변경이 만들지 않은 것. ⭐ 이 구분이 없으면 리뷰가 남의 부채로 머지를 막는다.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "line", "summary", "reviewers"],
+        "properties": {
+          "file": {"type": "string"},
+          "line": {"type": ["integer", "null"], "description": "1-기반 줄 번호. ⚠ **모르면 0 또는 null** — 둘은 같은 뜻이고 모든 소비자가 동일하게 다뤄야 한다(리뷰어는 finding-schema 규약상 0 을 내고 병합자는 null 을 내기도 한다). 2026-09-02 에 _dedup.py 가 `isinstance(0,int)` 로 0 을 실제 줄로 읽어 **가짜 합의를 만들었다** — 그 등가성은 dedup.test.sh 의 ①②가 지킨다."},
+          "summary": {"type": "string"},
+          "reviewers": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+
+    "rejected": {
+      "type": "array",
+      "description": "⭐⭐ 이것이 병합자의 본체다. 합치기만 하면 소음이 배로 늘 뿐이다.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["summary", "raised_by", "reject_reason"],
+        "properties": {
+          "summary": {"type": "string"},
+          "raised_by": {"type": "array", "items": {"type": "string"}},
+          "reject_reason": {"type": "string", "description": "⭐ 「확인 못 했으니 기각」은 기각이 아니다. 코드의 무엇이 그 주장을 부정하는지 줄 번호와 함께 적어라."}
+        }
+      }
+    },
+
+    "coverage_gap": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "아무도 확인하지 않은 영역. ⭐ 「리뷰했다」의 실제 범위를 여기가 정직하게 만든다 — 비워 두면 전수 리뷰였다고 주장하는 것이다."
+    },
+
+    "claims_contradicted": {
+      "type": "array",
+      "description": "구현자 브리핑의 주장 중 코드와 어긋난 것. ⚠ 브리핑을 못 받았으면 빈 배열이고 그 사실을 merge_note 에 적어라.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "note"],
+        "properties": {
+          "claim": {"type": "string"},
+          "note": {"type": "string"}
+        }
+      }
+    },
+
+    "agreement_note": {"type": "string", "description": "겹친 항목 N / 단독 N / 상충 N / 기각 N. ⚠ 리뷰어가 같은 모델 계열뿐이면 합의는 「독립 동의」가 아니다 — 그 사실도 여기 적어라."},
+    "merge_note": {"type": "string", "description": "판정하며 어려웠던 점. ⭐ 기각 0 이면 반드시 그 사유(정말 전부 타당했나, 아니면 확인을 건너뛰었나)."}
+  }
+}

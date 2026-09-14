@@ -1,0 +1,119 @@
+{
+  "$comment": "리뷰어 3종(Claude 계약검증 · Claude 무편향 · Codex 교차검증)의 공용 출력 계약. codex 는 이 파일을 --output-schema 로 강제받고, Claude 리뷰어는 프롬프트로 같은 모양을 요구받는다. 같은 사실을 두 모양으로 담으면 병합이 불가능해진다 — 정본은 이 파일 하나다. ⚠ OpenAI structured outputs 규약상 모든 필드가 required 이고 additionalProperties:false 다. '없음'은 빈 문자열/빈 배열로 표현한다(필드를 빼지 마라).",
+  "type": "object",
+  "properties": {
+    "reviewer": {
+      "type": "string",
+      "description": "이 리뷰를 쓴 주체. claude-contract | claude-blind | codex 중 하나."
+    },
+    "scope_verdict": {
+      "type": "string",
+      "enum": ["on-goal", "drifted", "incomplete", "cannot-judge"],
+      "description": "목표 계약 대비 판정. on-goal=요구를 충족하고 범위를 지켰다 / drifted=요구에 없던 것을 했다 / incomplete=요구 중 안 된 것이 있다 / cannot-judge=목표를 받지 못해 판정 불가(무편향 리뷰어의 정상값)."
+    },
+    "scope_note": {
+      "type": "string",
+      "description": "위 판정의 근거 1~3문장. drifted·incomplete 면 어느 항목인지 지목한다. cannot-judge 면 빈 문자열."
+    },
+    "findings": {
+      "type": "array",
+      "description": "결함 목록. 심각도 높은 순. 확신이 없으면 넣지 말고 not_reviewed 나 confidence=low 로 표현하라 — 목록이 길다고 좋은 리뷰가 아니다.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "레포 루트 기준 상대경로. 파일을 특정할 수 없으면 빈 문자열."
+          },
+          "line": {
+            "type": "integer",
+            "description": "1-기반 줄 번호. 특정할 수 없으면 0."
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["blocker", "major", "minor", "nit"],
+            "description": "blocker=머지하면 안 된다(동작이 틀리거나 보안 구멍) / major=고쳐야 하지만 머지를 막지는 않는다 / minor=개선 / nit=취향."
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "correctness",
+              "security",
+              "regression",
+              "convention",
+              "scope-drift",
+              "test-gap",
+              "honesty",
+              "performance",
+              "maintainability"
+            ],
+            "description": "honesty=화면·문서·주석이 사실과 다르게 말한다(정직 공백 위반, 없는 근거를 주장). scope-drift=목표에 없던 변경. test-gap=보호장치가 없거나 대조군이 없어 그 테스트가 무엇을 지키는지 알 수 없다."
+          },
+          "summary": {
+            "type": "string",
+            "description": "결함 한 문장. 결과가 아니라 결함 자체를 말하라."
+          },
+          "failure_scenario": {
+            "type": "string",
+            "description": "⭐ 오탐 억제 장치 — 이 결함이 실제로 터지는 구체적 경로: 어떤 입력·상태에서 무엇이 틀리게 나오는가. 구체적 시나리오를 쓸 수 없으면 그것은 결함이 아니라 취향이다(severity 를 nit 으로 내리거나 빼라). 추상적 우려('안전하지 않을 수 있다')는 이 필드를 채운 것이 아니다."
+          },
+          "evidence": {
+            "type": "string",
+            "description": "무엇을 실제로 확인했는가(읽은 파일·실행한 명령·인용한 줄). 확인하지 않고 추측했으면 '추측: …' 으로 시작하라. 근거를 지어내지 마라."
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["high", "medium", "low"],
+            "description": "high=코드를 읽고 확인했다 / medium=강하게 의심되나 실행해 보지 않았다 / low=패턴상 의심될 뿐이다."
+          },
+          "introduced_by_this_change": {
+            "type": "boolean",
+            "description": "⭐ 이 변경이 만든 문제인가. diff 의 추가(+) 줄에 있으면 true, 원래 있던 코드에서 발견한 것이면 false. false 는 버리라는 뜻이 아니라 '실재하지만 이 변경을 막을 이유는 아니다'라는 뜻이다(병합 단계에서 pre_existing 으로 분류된다). 이 구분이 없으면 리뷰가 남의 부채로 머지를 막는다."
+          },
+          "suggested_fix": {
+            "type": "string",
+            "description": "고치는 방향 1~2문장. 코드를 통째로 쓰지 마라 — 구현자가 문맥을 더 안다."
+          }
+        },
+        "required": [
+          "file",
+          "line",
+          "severity",
+          "category",
+          "summary",
+          "failure_scenario",
+          "evidence",
+          "confidence",
+          "introduced_by_this_change",
+          "suggested_fix"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "not_reviewed": {
+      "type": "array",
+      "description": "⭐ 정직 공백 — 보지 못했거나 판정할 수 없었던 영역. '없음'을 '괜찮음'으로 읽히게 하지 마라. 예: '테스트를 실행하지 않았다', 'infra/ YAML 은 라이브와 대조하지 못했다'. 빈 배열은 '전부 봤다'는 주장이 되므로 신중히 써라.",
+      "items": { "type": "string" }
+    },
+    "claims_checked": {
+      "type": "array",
+      "description": "구현 브리핑의 '왜' 섹션(구현자의 주장)을 검증한 결과. 계약검증 리뷰어만 채운다 — 무편향 리뷰어는 브리핑을 받지 않으므로 빈 배열이다.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "claim": { "type": "string", "description": "구현자가 한 주장(인용)." },
+          "verdict": {
+            "type": "string",
+            "enum": ["supported", "contradicted", "unverifiable"],
+            "description": "supported=확인했고 맞다 / contradicted=확인했고 틀리다 / unverifiable=확인할 수단이 없다."
+          },
+          "note": { "type": "string", "description": "무엇을 보고 그렇게 판정했는가." }
+        },
+        "required": ["claim", "verdict", "note"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["reviewer", "scope_verdict", "scope_note", "findings", "not_reviewed", "claims_checked"],
+  "additionalProperties": false
+}

@@ -1,0 +1,19 @@
+{
+  "name": "go-review",
+  "version": "0.5.0",
+  "description": "계획 승인부터 교차 리뷰까지 — /plan 으로 계획을 파일로 남기고, /go 로 승인하면 목표 계약이 매 턴 문맥에 재주입되며, /review-loop 이 문맥 없는 리뷰어들을 병렬로 띄우고 별도 에이전트가 검증·기각해 병합한다. 자리(계약검증·무편향·교차모델)와 모델은 다른 축이라 구성 파일(preset P1~P3)로 고르고, 어느 구성이 도는지 스크립트가 말해 준다. 계획 미완료는 완주 2축(도구·파일)이, 확정 결함 미해결은 리뷰 축이 Stop 에서 차단한다. 리뷰어 자신을 재는 축이 셋 — 절제(이 리뷰어를 빼면 놓쳤을 것) · 정밀도(사람 판정, 모델이 못 채운다) · 재현율(정답을 아는 회귀 케이스 25건, 그중 9건은 결함이 없는 대조군이라 「전부 결함이라고 답하는」 리뷰어가 만점을 못 받는다). 외부 도구 의존은 scripts/deps-check.sh 가 센다 — jq 가 없으면 Stop 게이트가 붙어 있는 채로 아무것도 보지 않기 때문이다. 게이트 자신에 14스위트 402검사.",
+  "author": {
+    "name": "jwjinn"
+  },
+  "homepage": "https://github.com/jwjinn/go-skill",
+  "repository": "https://github.com/jwjinn/go-skill",
+  "license": "MIT",
+  "keywords": [
+    "plan",
+    "code-review",
+    "hooks",
+    "multi-agent",
+    "evaluation",
+    "codex"
+  ]
+}

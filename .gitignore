@@ -1,0 +1,8 @@
+# 런타임 산출물 — 이 저장소는 도구를 담고 결과는 쓰는 프로젝트에 남는다
+.claude/plan-active.md
+.claude/plan-draft.md
+.claude/review-active.md
+plugins/go-review/review/runs/
+plugins/go-review/review/eval/runs/
+__pycache__/
+*.pyc

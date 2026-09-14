@@ -1,0 +1,59 @@
+{
+  "description": "go-review 게이트 — 세션 시작 진단(doctor) · 계획 승인 전제 확인(/go) · 목표 재정렬(매 턴) · 완주 2축(도구·파일) · 리뷰 반영",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/go-precheck.sh\"",
+            "timeout": 10,
+            "statusMessage": "/go 사전 확인(계획 초안 유무)"
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/goal-echo.sh\"",
+            "timeout": 10,
+            "statusMessage": "목표 재정렬(원 요청·범위 밖)"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/todo-completion-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "계획 완주 확인(도구 축 — 마지막 TodoWrite)"
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/plan-file-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "계획 완주 확인(미완료 단계 차단)"
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/review-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "리뷰 반영 확인(확정 결함 미해결 차단)"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/doctor.sh\" --hook",
+            "timeout": 20,
+            "statusMessage": "go 체인 진단(2중 등록·로컬 사본·codex·계획 소유자)"
+          }
+        ]
+      }
+    ]
+  }
+}

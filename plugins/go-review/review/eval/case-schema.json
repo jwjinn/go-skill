@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "리뷰어 회귀 케이스",
+  "description": "정답을 아는 diff 하나. 리뷰어가 그것을 잡는지 재는 것이 목적이다.\n\n⭐ 이 형식의 핵심은 `defect: false` 케이스(대조군)를 **같은 형식으로** 담는 것이다.\n결함 케이스만 모으면 「전부 결함이라고 답하는」 리뷰어가 만점을 받는다 —\n이 레포가 46행에 걸쳐 배운 「대조군 없는 테스트는 근거가 아니다」를 평가 자신에 적용한 것.",
+  "type": "object",
+  "required": ["id", "class", "lang", "defect", "diff"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "안정적인 식별자. 점수를 라운드 간 비교하려면 바뀌면 안 된다."
+    },
+    "class": {
+      "type": "string",
+      "description": "결함 부류. 부류별 재현율을 내는 축이라 자유문이 아니라 어휘를 재사용해라.\n대조군은 부류가 없으므로 `대조군` 을 쓴다."
+    },
+    "lang": {
+      "type": "string",
+      "description": "go · ts · tsx · css · python · lua · yaml · sh · sql — 언어별 약점을 가르는 축"
+    },
+    "defect": {
+      "type": "boolean",
+      "description": "⭐ false 면 **대조군**이다 — 이 diff 에는 결함이 없고, 정답은 「보고하지 않는 것」이다.\n대조군에서의 보고는 오탐이고, 그 비율이 재현율만큼 중요하다."
+    },
+    "why": {
+      "type": "string",
+      "description": "왜 이것이 결함인가 / 대조군이면 왜 결함이 아닌가. 사람이 케이스를 검토할 때 읽는다.\n⚠ 리뷰어에게는 **주지 않는다**(정답을 주는 것이다)."
+    },
+    "origin": {
+      "type": "string",
+      "description": "출처. 실제 사건이면 그 기록을 가리켜라(예: `진행로그 2026-08-12`)."
+    },
+    "briefing": {
+      "type": "string",
+      "description": "구현자의 주장. 있으면 `reviewer-contract` 도 시험된다 —\n⭐ 주장 중 하나를 **일부러 거짓으로** 두면 「주장 검증」 능력을 직접 잰다.\n없으면 이 케이스는 diff 만 보는 리뷰어(blind·codex)용이다."
+    },
+    "false_claim": {
+      "type": "string",
+      "description": "briefing 안의 어느 주장이 거짓인지. 채점기가 `claims_checked` 에서 그것을 찾는다."
+    },
+    "diff": {
+      "type": "string",
+      "description": "unified diff. 리뷰어가 받는 전부다.\n⚠ 파일 경로는 실재하지 않아도 된다 — 리뷰어가 파일을 못 열면 diff 만으로 판단한다.\n그래서 **diff 안에 판단 재료가 다 있어야** 한다(주변 문맥을 넉넉히 넣어라)."
+    },
+    "expect": {
+      "type": "object",
+      "description": "defect:true 일 때의 정답. 대조군에는 없다.",
+      "required": ["file"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+          ],
+          "description": "결함이 있는 파일. **위치 적중**의 기준이고 자동 채점에서 가장 믿을 만한 신호다.\n\n⭐ 배열이면 **허용 목록**이다 — 결함이 두 파일 **사이**에 있으면 어느 쪽을 지목해도 옳다\n(예: A 가 만드는 이름을 B 가 정의하지 않음). 첫 실측이 이것을 잡았다:\n정답지에 TSX 만 뒀는데 리뷰어가 CSS 를 지목했고 사유는 정확했다 —\n**놓친 것은 리뷰어가 아니라 정답지였다.**\n⚠ 배열일 때는 `line` 을 쓰지 마라(파일마다 줄이 다르다)."
+        },
+        "line": {
+          "type": "integer",
+          "description": "결함 줄(선택). 있으면 ±tolerance 안이면 적중.\n\n⚠⚠ **결함이 두 지점에 걸치면 줄을 넣지 마라.** 「여기 선언, 저기 미배선」·「A 가 만드는 이름을 B 가 정의 안 함」처럼\n한 결함이 두 자리를 잇는 경우, 어느 쪽을 짚어도 옳은데 한 줄만 정답으로 두면 옳은 지적이 「놓침」이 된다.\n실측에서 이 함정을 **세 번** 밟았다(phantom-symbol · declared-not-wired 외) — 매번 리뷰어가 아니라 정답지가 틀렸다."
+        },
+        "tolerance": {
+          "type": "integer",
+          "default": 8,
+          "description": "줄 허용 오차. diff 문맥 폭보다 넓게 잡아라 — 리뷰어가 가리키는 줄이 한두 줄 어긋나는 것은 놓친 것이 아니다."
+        },
+        "any_of": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "**사유 적중**의 보조 신호 — 요약·시나리오에 이 중 하나라도 있으면 사유를 짚었다고 본다.\n⚠ 약한 신호다. 한글·영어를 함께 넣고, 없어도 위치가 맞으면 절반은 맞은 것으로 센다.\n⚠⚠ 이것만으로 「사유가 맞다」고 단정하지 마라 — 정확한 판정은 사람이나 판정 모델이 한다."
+        },
+        "min_severity": {
+          "type": "string",
+          "enum": ["nit", "minor", "major", "blocker"],
+          "description": "이 심각도 미만으로 보고하면 「봤지만 과소평가」로 따로 센다(놓침과 다르다)."
+        }
+      }
+    }
+  }
+}
