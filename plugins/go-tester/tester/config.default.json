@@ -1,0 +1,83 @@
+{
+  "_읽는 법": [
+    "테스트 에이전트 구성의 정본. tester.sh 가 이 파일을 읽어 「켤 수 있나·어디에 붙나」를 정한다.",
+    "⭐ 프로젝트 `.claude/tester/config.json` 이 있으면 그것이 이긴다. 어느 파일을 읽었는지 _config.py 가 출력한다.",
+    "⚠ 스킬 파일(commands/*.md)을 고쳐 구성을 바꾸지 마라 — 플러그인 업데이트에 덮인다."
+  ],
+
+  "enabled": "ask",
+
+  "_enabled 뜻": {
+    "ask": "⭐ 기본 — 계획마다 사람에게 묻는다. 답이 「쓴다」가 아니면 호출이 0회다(rc 70).",
+    "on": "묻지 않고 항상 쓴다. 로컬 모델이 상시 도는 것이 확인된 프로젝트에서만.",
+    "off": "묻지도 않고 쓰지도 않는다. 세션이 현행대로 테스트를 직접 쓴다."
+  },
+
+  "_왜 기본이 ask 인가": [
+    "사용자 지시(2026-09-15): 「로컬 모델을 쓸 수 없는 상황에서는 안쓸 수 있는 옵션을 달아주고,",
+    "이게 default는 로컬 모델을 안쓰는 거고 go-review 단계에서 로컬 모델을 쓸 거냐고 물어보고",
+    "heartbeat로 통신이 되는지 확인을 하고, 명시적으로 쓴다고 하면, 지금 것을 사용할 수 있도록 하자」",
+    "⭐ 그래서 fail-closed 다 — 묻지 않았거나 답이 없으면 **안 쓰는 쪽**으로 닫힌다.",
+    "   opt-in 파일이 없으면 tester.sh 는 프록시조차 띄우지 않는다."
+  ],
+
+  "endpoint": "",
+  "model": "",
+
+  "_endpoint·model": [
+    "빈 값이면 이 플러그인은 **엔드포인트를 모르는 상태**이고 probe 가 즉시 unavailable 을 낸다.",
+    "프로젝트 config.json 에 적어라. OpenAI 호환 `/v1` 루트까지 적는다.",
+    "예: \"endpoint\": \"http://10.0.0.5:30801/v1\", \"model\": \"qwen3-coder-next\"",
+    "⚠ 키는 여기 적지 마라 — `~/.config/go-skill/tester.env` 의 GO_TESTER_API_KEY 만 읽는다."
+  ],
+
+  "proxy_port": 4141,
+  "proxy_master_key": "sk-go-tester-local",
+
+  "_프록시": [
+    "Claude Code 는 Anthropic Messages 로 말하고 서빙은 OpenAI chat 을 받는다 — 사이에 변환이 필요하다.",
+    "uvx 로 litellm 을 띄운다(설치 없음 · 실측 기동 8초). proxy.sh 가 멱등하게 관리한다.",
+    "master_key 는 **로컬 루프백 전용**이다(127.0.0.1 바인드). 비밀이 아니고 비밀일 필요도 없다."
+  ],
+
+  "max_concurrency": 4,
+
+  "_max_concurrency 근거": [
+    "실측(2026-09-15 · Read+Bash 짧은 작업): 동시 1·2·4·6·12 **전부 실패 0**,",
+    "지연만 선형 증가(2.4s → 10.0s). 502 는 0건.",
+    "⚠ 그런데 실제 테스트 작업은 훨씬 길다(P0-3 은 26턴 30.6초) — **그 조건의 동시성은 미측정**이다.",
+    "그래서 12 가 아니라 4 로 둔다. 측정한 상한이 아니라 측정하지 않은 구간에 대한 여유다."
+  ],
+
+  "timeout_sec": 900,
+  "probe_timeout_sec": 15,
+
+  "ledger": ".claude/tester/tester.jsonl",
+
+  "test_path_patterns": [
+    "*_test.go",
+    "*.test.ts",
+    "*.test.tsx",
+    "*.test.js",
+    "*.test.sh",
+    "*_test.py",
+    "test_*.py",
+    "__tests__/*",
+    "tests/*"
+  ],
+
+  "_test_path_patterns": [
+    "⭐ 이 목록 **밖**의 파일이 바뀌면 tester.sh 가 rc 66 으로 거부한다.",
+    "테스트를 통과시키려고 소스를 고치는 경로를 막는 것이 목적이다 —",
+    "시스템 프롬프트의 규율이 아니라 종료코드로 막는다(규율은 빠뜨릴 수 있다)."
+  ],
+
+  "tools": "Read,Write,Edit,Bash,Glob,Grep",
+
+  "_tools 경고": [
+    "⛔ 실측(2026-09-15): `--allowedTools \"\"` 는 `bypassPermissions` 에서 **도구를 막지 못한다.**",
+    "   막는 것은 `--tools` 다. 그래서 이 값을 `--tools` 로 넘긴다.",
+    "   그 차이를 모르고 allowedTools 로 막은 줄 알았다가, 자식이 Read·Edit·Write 로",
+    "   부모의 계획 파일을 고치는 것을 재현했다."
+  ]
+}

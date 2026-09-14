@@ -1,0 +1,94 @@
+{
+  "type": "object",
+  "description": "테스트 에이전트의 유일한 산출 계약. 세션이 받는 것은 이 JSON 하나이고, 테스트 파일 본문도 실행 로그도 세션 문맥에 들어가지 않는다 — 그것이 토큰을 아끼는 지점이다. control_group 이 required 인 것이 이 스키마의 본체다: 대조군을 안 돌린 산출은 형태 자체가 성립하지 않는다.",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["run", "write", "full"],
+      "description": "run=기존 테스트 실행·판독만 / write=테스트 작성 / full=작성 + 대조군 증명."
+    },
+    "commands": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "실제로 실행한 셸 명령. 지어내지 마라 — 돌리지 않은 명령을 여기 적으면 그 줄이 거짓 증거가 된다."
+    },
+    "passed": { "type": "integer", "description": "마지막 실행에서 통과한 테스트 수." },
+    "failed": { "type": "integer", "description": "마지막 실행에서 실패한 테스트 수." },
+    "skipped": { "type": "integer", "description": "건너뛴 테스트 수. 모르면 0." },
+    "failures": {
+      "type": "array",
+      "description": "실패한 테스트의 위치와 오류. failed=0 이면 빈 배열.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "file": { "type": "string", "description": "레포 루트 기준 상대경로." },
+          "line": { "type": "integer", "description": "1-기반. 모르면 0." },
+          "error": { "type": "string", "description": "오류 요지 한두 줄. 로그 전문을 붙이지 마라." }
+        },
+        "required": ["name", "file", "line", "error"],
+        "additionalProperties": false
+      }
+    },
+    "tests_written": {
+      "type": "array",
+      "description": "새로 쓰거나 고친 테스트 파일. mode=run 이면 빈 배열.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": { "type": "string", "description": "레포 루트 기준 상대경로." },
+          "locks": {
+            "type": "string",
+            "description": "⭐ 이 테스트가 **무엇을 잠그는가** 한 문장. 「동작을 검증한다」처럼 무엇이든 해당하는 문장은 아무것도 말하지 않은 것이다. 깨졌을 때 어떤 증상이 나는지로 써라."
+          }
+        },
+        "required": ["file", "locks"],
+        "additionalProperties": false
+      }
+    },
+    "control_group": {
+      "type": "array",
+      "description": "⭐⭐ 이 스키마의 본체. tests_written 의 각 주장마다, 그 보호를 일부러 깨면 테스트가 실제로 붉어지는지 확인한 결과. 대조군 없는 테스트는 근거가 아니다 — 통과하는 이유가 보호 때문인지 우연인지 아무도 모른다.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "test": { "type": "string", "description": "어느 테스트(또는 케이스)를 겨냥했나." },
+          "mutation": { "type": "string", "description": "무엇을 어떻게 깼나. 파일·줄·바꾼 내용." },
+          "went_red": {
+            "type": "boolean",
+            "description": "⚠ **실제로 실패하는 실행을 관측했을 때만** true. 「실패할 것이다」는 false 다. 관측하지 않았으면 false 로 두고 notes 에 왜 못 했는지 적어라 — 거짓 true 하나가 이 도구 전체를 쓸모없게 만든다."
+          }
+        },
+        "required": ["test", "mutation", "went_red"],
+        "additionalProperties": false
+      }
+    },
+    "files_changed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "작업 중 내용이 바뀐 모든 파일(레포 루트 기준). 대조군에서 깼다가 복원한 파일은 **복원했으면 여기 넣지 마라**. tester.sh 가 git 으로 독립 검증하므로 이 목록이 사실과 다르면 드러난다."
+    },
+    "notes": {
+      "type": "string",
+      "description": "⭐ 확인하지 못한 것 · 추측으로 적은 것 · 환경 때문에 못 돌린 것. 「특이사항 없음」으로 채우지 마라. 못 잰 것을 못 쟀다고 적는 것이 이 필드의 목적이다."
+    },
+    "unavailable_reason": {
+      "type": "string",
+      "description": "작업을 수행할 수 없었으면 그 사유. 정상 수행이면 빈 문자열."
+    }
+  },
+  "required": [
+    "mode",
+    "commands",
+    "passed",
+    "failed",
+    "skipped",
+    "failures",
+    "tests_written",
+    "control_group",
+    "files_changed",
+    "notes",
+    "unavailable_reason"
+  ],
+  "additionalProperties": false
+}

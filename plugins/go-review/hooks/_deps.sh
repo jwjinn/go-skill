@@ -21,7 +21,7 @@
 # 필수 = 없으면 이 체인의 **어떤 축이 통째로 죽는** 것.
 # 선택 = 없으면 기능이 줄지만 체인은 성립하는 것(대체 경로가 코드에 있다).
 deps_required_list() { printf 'bash git jq python3'; }
-deps_optional_list() { printf 'codex timeout'; }
+deps_optional_list() { printf 'codex timeout uvx curl'; }
 
 # deps_role <도구> — 그 도구가 없으면 무엇이 죽는가. ⚠ 「필요하다」가 아니라 **대가**를 적는다.
 deps_role() {
@@ -32,6 +32,8 @@ deps_role() {
     python3) printf '리뷰 구성 해석·중복 제거·측정·회귀 평가(review/ 전량)' ;;
     codex)   printf '교차 모델 리뷰어. 없으면 preset 을 P1 로 내리고 그 자리를 비운다(리뷰는 돈다)' ;;
     timeout) printf 'codex 호출의 시간 상한. 없으면 상한 없이 부른다(gtimeout 이 있으면 그것을 쓴다)' ;;
+    uvx)     printf 'go-tester 의 변환 프록시(litellm). 없으면 테스트 위임이 rc 70 으로 닫히고 세션이 직접 테스트를 쓴다' ;;
+    curl)    printf 'go-tester 의 heartbeat. 없으면 가용성을 잴 수 없어 위임이 닫힌다' ;;
     *)       printf '' ;;
   esac
 }
@@ -44,6 +46,8 @@ deps_hint() {
     git)     printf 'brew install git   |   apt-get install -y git   |   dnf install -y git' ;;
     codex)   printf 'npm i -g @openai/codex   (설치 뒤 `codex login` 까지 해야 실제로 돈다)' ;;
     timeout) printf 'brew install coreutils   (gtimeout 로 깔린다 — 이 체인이 자동으로 찾는다)   |   리눅스는 기본 포함' ;;
+    uvx)     printf 'brew install uv   |   curl -LsSf https://astral.sh/uv/install.sh | sh' ;;
+    curl)    printf '대개 기본 포함   |   apt-get install -y curl   |   dnf install -y curl' ;;
     bash)    printf '이 스크립트가 돌고 있다면 있다' ;;
     *)       printf '' ;;
   esac

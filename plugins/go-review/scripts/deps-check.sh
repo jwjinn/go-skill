@@ -49,6 +49,8 @@ ver_of() {   # <도구> — 한 줄짜리 버전 문자열(못 읽으면 빈 값
     jq)      jq --version 2>/dev/null | head -1 ;;
     python3) python3 -V 2>&1 | head -1 ;;
     codex)   codex --version 2>/dev/null | head -1 ;;
+    uvx)     uvx --version 2>/dev/null | head -1 ;;
+    curl)    curl --version 2>/dev/null | head -1 | cut -d' ' -f1-2 ;;
     timeout) printf '%s' "$(deps_timeout_cmd)" ;;
     *) printf '' ;;
   esac
@@ -65,20 +67,31 @@ for c in $(deps_required_list); do
 done
 
 say "── 선택 ────────────────────────────────────────────────────────────"
-# timeout 은 이름이 둘이라 따로 본다(`timeout` · `gtimeout`).
-tc=$(deps_timeout_cmd)
-if [ -n "$tc" ]; then
-  pass "$(printf '%-8s %s 로 쓴다' 'timeout' "$tc")"
-else
-  warns "$(printf '%-8s 없다 — %s' 'timeout' "$(deps_role timeout)")"
-  say "        설치: $(deps_hint timeout)"
-fi
-if command -v codex >/dev/null 2>&1; then
-  pass "$(printf '%-8s %s' 'codex' "$(ver_of codex)")"
-else
-  warns "$(printf '%-8s 없다 — %s' 'codex' "$(deps_role codex)")"
-  say "        설치: $(deps_hint codex)"
-fi
+# ⭐ **목록을 순회한다.** 종전에는 timeout·codex 를 여기 하드코딩했고, 그래서
+#   `deps_optional_list` 에 도구를 더해도 점검 수가 늘지 않았다(정의는 있는데 아무도 안 읽는
+#   상태). 도구가 늘어나는 자리는 `_deps.sh` 하나여야 한다.
+for c in $(deps_optional_list); do
+  case "$c" in
+    timeout)
+      # timeout 은 이름이 둘이라 따로 본다(`timeout` · `gtimeout`).
+      tc=$(deps_timeout_cmd)
+      if [ -n "$tc" ]; then
+        pass "$(printf '%-8s %s 로 쓴다' 'timeout' "$tc")"
+      else
+        warns "$(printf '%-8s 없다 — %s' 'timeout' "$(deps_role timeout)")"
+        say "        설치: $(deps_hint timeout)"
+      fi
+      ;;
+    *)
+      if command -v "$c" >/dev/null 2>&1; then
+        pass "$(printf '%-8s %s' "$c" "$(ver_of "$c")")"
+      else
+        warns "$(printf '%-8s 없다 — %s' "$c" "$(deps_role "$c")")"
+        say "        설치: $(deps_hint "$c")"
+      fi
+      ;;
+  esac
+done
 
 # ── ⭐ 있음 ≠ 돌아감 ────────────────────────────────────────────────────────
 #

@@ -1,0 +1,18 @@
+{
+  "name": "go-tester",
+  "version": "0.1.0",
+  "description": "테스트 작업을 로컬 모델에 붙은 별도 claude 프로세스에 위임한다. 세션에는 결과 JSON 하나만 돌아오고 테스트 본문도 실행 로그도 문맥에 들어오지 않는다. 기본은 **쓰지 않는 것**이고(fail-closed), /plan 이 heartbeat 를 붙여 묻고 /go 가 착수 직전에 다시 물어 명시적 「쓴다」를 받았을 때만 그 계획 동안 켜진다 — 어느 시점에서든 묻지 않았으면 호출이 0회다. 산출 계약의 본체는 control_group 이다: 보호를 일부러 깨서 테스트가 붉어지는 것을 관측하지 않으면 그 산출은 rc 67 로 거부된다. 테스트 파일 밖을 고친 산출은 rc 66, 부모의 계획 파일을 건드린 산출은 rc 68 로 거부하고 원본을 복원한다. 되돌리는 절차는 ROLLBACK.md 의 3층이고 rollback.sh 가 그 좌표를 읽는다. 자신에 21검사(절반이 위반을 일부러 만들어 거부되는지 보는 대조군).",
+  "author": {
+    "name": "jwjinn"
+  },
+  "homepage": "https://github.com/jwjinn/go-skill",
+  "repository": "https://github.com/jwjinn/go-skill",
+  "license": "MIT",
+  "keywords": [
+    "testing",
+    "local-model",
+    "control-group",
+    "delegation",
+    "opt-in"
+  ]
+}
