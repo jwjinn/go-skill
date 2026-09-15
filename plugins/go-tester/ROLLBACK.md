@@ -10,7 +10,7 @@
 | 키 | 값 | 비고 |
 |---|---|---|
 | `SYMLINK_PATH` | `~/.claude/skills/go-review` | 전역 스킬 자동 로드 지점 |
-| `SYMLINK_TARGET_BEFORE` | `/Users/woojin/개발/go-review/plugins/go-review` | 도입 전 대상 |
+| `SYMLINK_TARGET_BEFORE` | `/Users/woojin/개발/go-review-archived-2026-09-15/plugins/go-review` | 도입 전 대상. ⚠ 2026-09-15 자원 회수에서 디렉토리를 `-archived-…` 로 rename 했다 — 되돌리려면 이 경로 그대로 쓰면 된다(원래 이름으로 복원할 필요 없다) |
 | `SYMLINK_TARGET_AFTER` | `/Users/woojin/개발/go-skill/plugins/go-review` | P0-4 이후 대상(정본) |
 | `TAG` | `pre-tester-2026-09-15` | 세 레포 공통 |
 | `GO_REVIEW_HEAD` | `4de6fd2` | 로컬 `~/개발/go-review` · ⚠ **원격 없음**(실측 2026-09-15) |
@@ -57,3 +57,6 @@
 ## 변경 이력
 
 - 2026-09-15 신설(P0-0). `jwjinn/go-review` 원격 부재를 같은 날 실측해 반영.
+- 2026-09-15 자원 회수: 로컬 `~/개발/go-review` → `~/개발/go-review-archived-2026-09-15` 로 rename.
+  심링크는 이미 go-skill 을 가리키므로 체인은 영향이 없다(rename 직후 `doctor.sh` 9검사 중 결함 0 확인).
+  ⇒ 위 표의 `SYMLINK_TARGET_BEFORE` 를 새 경로로 갱신했다 — 좌표가 실제와 갈라지면 롤백이 틀린 자리로 간다.
