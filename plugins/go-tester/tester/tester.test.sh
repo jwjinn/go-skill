@@ -224,6 +224,59 @@ R="$T/r-b5"; new_repo "$R"; make_mock "$(good_result red)" 'echo "package p" > "
 rc=$(run_with_mocks "$R" --mode full)
 [ "$rc" = "0" ] && ok "B5 테스트 파일만 수정 → rc 0 (대조군: B4 가 거부되는 것과 대비)" || no "B5 테스트 파일만 수정 → rc 0" "실제 rc=$rc"
 
+# ⭐⭐ B6 — 거부할 때 **부모의 미커밋 작업을 되돌린다**. (2026-09-15 실측으로 드러난 자리)
+#   rc 66 은 「소스가 바뀌었다」를 사후에 알릴 뿐이라, 그 알림을 읽을 때 부모가 그 파일에
+#   쓰던 작업은 이미 덮여 있다. 한 워커가 App.tsx 에 쓴 40줄이 그렇게 사라졌고 보존
+#   디렉토리에도 사본이 없어 복구가 불가능했다. 거부와 보존은 다른 일이다.
+R="$T/r-b6"; new_repo "$R"
+printf 'package p\n\n// 부모의 미커밋 작업 40줄\n' > "$R/x.go"
+make_mock "$(good_result red)" 'printf "package p\n// 자식이 덮어썼다\n" > "$PWD/x.go"; echo "package p" > "$PWD/y_test.go"'
+rc=$(run_with_mocks "$R" --mode full)
+[ "$rc" = "66" ] && ok "B6 자식이 부모의 더티 파일을 덮으면 rc 66" || no "B6 자식이 부모의 더티 파일을 덮으면 rc 66" "실제 rc=$rc"
+grep -q '부모의 미커밋 작업' "$R/x.go" \
+  && ok "B6b ⭐⭐ 거부하면서 부모의 미커밋 작업을 되돌린다(자식이 덮은 채로 두지 않는다)" \
+  || no "B6b 부모의 미커밋 작업을 되돌린다" "x.go=$(cat "$R/x.go" | tr '\n' ' ')"
+grep -q '자식이 덮어썼다' "$R/x.go" \
+  && no "B6c 되돌린 뒤에도 자식의 내용이 남아 있다" "복원이 부분적이다" \
+  || ok "B6c 되돌린 자리에 자식의 내용이 남지 않는다"
+[ -f "$R/.claude/tester/guard-b6/at-exit/x.go" ] || ls "$R"/../*/at-exit >/dev/null 2>&1 || true
+r6=$(reason_of)
+case "$r6" in *"부모 미커밋 복원"*) ok "B6d 사유가 무엇을 되돌렸는지 말한다" ;; *) no "B6d 사유가 무엇을 되돌렸는지 말한다" "사유=$r6" ;; esac
+
+# ⭐ B6e 대조군 — 부모가 **깨끗한** 파일이면 되돌릴 것이 없다(거부는 그대로).
+#   되돌리기가 「아무 때나 도는」 것이 아님을 보인다. 그러지 않으면 B6b 는 우연일 수 있다.
+R="$T/r-b6e"; new_repo "$R"
+make_mock "$(good_result red)" 'printf "package p\n// 자식이 덮어썼다\n" > "$PWD/x.go"; echo "package p" > "$PWD/y_test.go"'
+rc=$(run_with_mocks "$R" --mode full)
+r6e=$(reason_of)
+[ "$rc" = "66" ] && case "$r6e" in *"부모 미커밋 복원"*) no "B6e 되돌릴 것이 없는데 복원했다고 말한다" "사유=$r6e" ;; *) ok "B6e ⭐ 대조군 — 부모가 깨끗하면 복원 문구가 붙지 않는다" ;; esac \
+  || no "B6e 대조군 — 깨끗해도 소스 수정은 거부한다" "실제 rc=$rc"
+
+# ⭐⭐ B7 — 자식이 **대조군을 만들려고** 남긴 임시 백업은 범위 밖으로 세지 않는다.
+#   산출 계약은 「보호를 깨서 붉어지는 것을 관측하라」를 요구하고, 자식은 그러려면 원본을
+#   먼저 백업한다. 그 백업이 rc 66 에 걸리면 계약이 요구한 행동을 가드가 벌하는 꼴이다.
+#   실측으로 한 호출이 `rulePresets.ts.bak` 하나 때문에 거부됐다(원본과 차이 0 · 대조군 2/2 발화).
+R="$T/r-b7"; new_repo "$R"
+make_mock "$(good_result red)" 'cp "$PWD/x.go" "$PWD/x.go.bak"; echo "package p" > "$PWD/y_test.go"'
+rc=$(run_with_mocks "$R" --mode full)
+[ "$rc" = "0" ] && ok "B7 ⭐⭐ 자식이 남긴 대조군용 백업(*.bak)은 거부 사유가 아니다" || no "B7 대조군용 백업이 거부된다" "실제 rc=$rc · 사유=$(reason_of)"
+[ -f "$R/x.go.bak" ] && no "B7b 허용한 백업이 작업 트리에 남는다" "x.go.bak 잔존" || ok "B7b 허용하되 남기지는 않는다(검증 뒤 지운다)"
+
+# ⭐ B7c 대조군 — 허용은 **좁다**. 백업처럼 생기지 않은 파일은 그대로 거부한다.
+#   이것이 없으면 B7 의 수정이 「범위 검사를 통째로 느슨하게 만든 것」과 구분되지 않는다.
+R="$T/r-b7c"; new_repo "$R"
+make_mock "$(good_result red)" 'cp "$PWD/x.go" "$PWD/x_copy.go"; echo "package p" > "$PWD/y_test.go"'
+rc=$(run_with_mocks "$R" --mode full)
+[ "$rc" = "66" ] && ok "B7c ⭐ 대조군 — 백업 패턴이 아닌 새 소스 파일은 그대로 rc 66" || no "B7c 허용이 너무 넓다" "실제 rc=$rc"
+
+# ⭐ B7d 대조군 — **원래 있던** .bak 을 자식이 고치면 거부한다(새로 만든 것만 허용한다).
+R="$T/r-b7d"; new_repo "$R"
+printf 'package p\n// 원래 있던 백업\n' > "$R/x.go.bak"
+git -C "$R" add -A >/dev/null 2>&1; git -C "$R" commit -q -m bak
+make_mock "$(good_result red)" 'echo "// 자식이 고쳤다" >> "$PWD/x.go.bak"; echo "package p" > "$PWD/y_test.go"'
+rc=$(run_with_mocks "$R" --mode full)
+[ "$rc" = "66" ] && ok "B7d ⭐ 대조군 — 원래 있던 백업 파일을 고치면 거부한다" || no "B7d 원래 있던 백업 수정이 통과한다" "실제 rc=$rc"
+
 echo
 echo "── C. 부모 계획 파일 보호 ──────────────────────────────────────────"
 

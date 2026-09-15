@@ -41,6 +41,7 @@ done
 #     측정 도구의 버그다. 틀린 사유는 없는 것보다 나쁘다.
 #   ⚠ `timeout` 이 없는 환경도 있다(BSD 계열 기본). 없으면 시간 제한 없이 그냥 돌린다 —
 #     상한을 잃는 것이 측정 자체를 잃는 것보다 낫다.
+CG_PARSE="$(cd "$(dirname "$0")" && pwd)/_cgpaths.py"
 CG_TIMEOUT=""
 for c in timeout gtimeout; do command -v "$c" >/dev/null 2>&1 && { CG_TIMEOUT="$c"; break; }; done
 
@@ -122,13 +123,48 @@ rm -f "$WTBASE/err.$$"
 # ⭐ 커밋되지 않은 작업 파일(방금 쓴 테스트 등)을 워크트리로 옮긴다.
 #   워크트리는 HEAD 를 체크아웃하므로 미커밋 변경이 없다 — 그대로 두면 **테스트 파일이 없는**
 #   상태에서 대조군을 돌리게 되고, 그러면 무엇을 깨도 「붉어지지 않는다」가 나온다(거짓 음성).
-if git -C "$REPO" status --porcelain 2>/dev/null | grep -q .; then
-  git -C "$REPO" -c core.quotePath=false status --porcelain | awk '{print $NF}' | while IFS= read -r rel; do
-    [ -f "$REPO/$rel" ] || continue
-    mkdir -p "$WT/$(dirname "$rel")" 2>/dev/null
-    cp "$REPO/$rel" "$WT/$rel" 2>/dev/null
+#
+# ⚠ 경로 목록은 `-z`(NUL 구분)로 받는다. 종전 판은 `status --porcelain | awk '{print $NF}'`
+#   이었고 셋을 놓쳤다 — ① 공백이 들어간 경로는 마지막 낱말만 남는다 ② 이름이 바뀐 항목
+#   (`R  옛 -> 새`)의 원본 경로가 섞여 든다 ③ **untracked 디렉토리**는 porcelain 이
+#   `계단/` 한 줄로 접어서 내보내는데, `[ -f ]` 로 걸러 버리면 그 안의 파일이 하나도
+#   따라오지 않는다. 디렉토리면 통째로 복사한다.
+CG_LIST="$WTBASE/paths.$$"
+git -C "$REPO" -c core.quotePath=false status --porcelain -z 2>/dev/null > "$CG_LIST"
+if [ -s "$CG_LIST" ]; then
+  python3 "$CG_PARSE" "$CG_LIST" | while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    rel="${rel%/}"
+    if [ -d "$REPO/$rel" ]; then
+      mkdir -p "$WT/$(dirname "$rel")" 2>/dev/null
+      cp -R "$REPO/$rel" "$WT/$rel" 2>/dev/null
+    elif [ -f "$REPO/$rel" ]; then
+      mkdir -p "$WT/$(dirname "$rel")" 2>/dev/null
+      cp "$REPO/$rel" "$WT/$rel" 2>/dev/null
+    fi
   done
 fi
+rm -f "$CG_LIST"
+
+# ⛔⛔ 무시 대상이지만 **게이트가 반드시 필요로 하는 산출물**을 이어 준다 (2026-09-15 실측).
+#   `git worktree add` 는 추적되는 파일만 체크아웃한다. 그래서 `node_modules` 처럼
+#   gitignore 된 설치 산출물이 사본에 **없다** — `npx vitest` 는 거기서 무조건 실패한다.
+#   그러면 ①의 「깨끗한 상태」부터 rc≠0 이 되고 스크립트는 「대조군이 성립하지 않는다」를
+#   낸다. 읽는 사람은 그것을 **테스트의 문제**로 읽지만 실제로는 사본에 의존이 없는 것이다.
+#   ⇒ 그 조건에서 웹 슬라이스는 대조군을 **한 번도** 세울 수 없다. 2026-09-15 에 한
+#     저장소에서 위임 호출 둘이 연달아 rc 67 로 거부됐고, 자식은 「스크립트가 한글 경로를
+#     파싱하지 못한다」는 **틀린 사유**를 보고했다. 틀린 사유는 없는 것보다 나쁘다.
+#   ⭐ 복사가 아니라 **심링크**다. node_modules 는 파일이 수만 개라 복사하면 대조군 한 번에
+#     분 단위가 든다. 대조군은 소스만 변이하므로 의존을 공유해도 격리가 깨지지 않는다.
+#   ⚠ 링크는 워크트리를 버릴 때 함께 사라진다(`rm -rf` 는 심링크 자체만 지운다).
+git -C "$REPO" -c core.quotePath=false ls-files -- '*package.json' 2>/dev/null \
+  | grep -v '/node_modules/' | sed 's#package\.json$##' | while IFS= read -r depdir; do
+  SRC_NM="$REPO/${depdir}node_modules"
+  [ -d "$SRC_NM" ] || continue
+  [ -e "$WT/${depdir}node_modules" ] && continue
+  [ -n "$depdir" ] && mkdir -p "$WT/$depdir" 2>/dev/null
+  ln -s "$SRC_NM" "$WT/${depdir}node_modules" 2>/dev/null
+done
 
 [ -f "$WT/$FILE" ] || { emit false 0 0 "변이 대상 파일이 워크트리에 없다: $FILE"; exit 67; }
 

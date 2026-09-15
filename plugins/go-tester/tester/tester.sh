@@ -227,6 +227,48 @@ snapshot() { # snapshot <산출 파일> — "<경로>\t<지문>" 한 줄씩
 }
 snapshot "$BEFORE"
 
+# ⛔⛔ 자식이 부모의 **미커밋 작업**을 덮을 수 있다 — 시작 전에 사본을 떠 둔다 (2026-09-15 실측).
+#   rc 66 은 「테스트 패턴 밖이 바뀌었다」를 사후에 알릴 뿐이고, 그것을 읽을 때 부모가 그
+#   파일에 쓰던 작업은 이미 덮여 있다. 실측으로 한 워커가 `App.tsx` 에 쓴 40줄이 그렇게
+#   사라졌고, 보존 디렉토리에 그 파일 사본이 없어 복구가 불가능했다.
+#   ⇒ HEAD 와 다른 파일(추적 중 더티 + untracked)만 `$GUARD_DIR/pre/` 로 복사한다. 그 집합은
+#     작업 중인 것뿐이라 작다. 거부(rc 66·68)가 나면 자식이 건드린 것만 되돌린다.
+#   ⚠ 되돌리기는 **덮어쓰기**이므로 되돌리기 직전 내용을 `.at-exit` 로 함께 남긴다 —
+#     자식이 쓴 것이 옳았을 수도 있고, 그 판단은 사람이 한다.
+PRE_DIR="$GUARD_DIR/pre"
+PRE_LIST="$GUARD_DIR/pre-list.txt"
+: > "$PRE_LIST"
+if [ "$IS_GIT" = "1" ]; then
+  mkdir -p "$PRE_DIR" 2>/dev/null
+  git -C "$CWD" -c core.quotePath=false status --porcelain -z 2>/dev/null > "$GUARD_DIR/pre.raw"
+  if [ -s "$GUARD_DIR/pre.raw" ]; then
+    python3 "$SELF/_cgpaths.py" "$GUARD_DIR/pre.raw" | while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      case "$rel" in */) continue ;; esac
+      [ -f "$CWD/$rel" ] || continue
+      mkdir -p "$PRE_DIR/$(dirname "$rel")" 2>/dev/null
+      cp "$CWD/$rel" "$PRE_DIR/$rel" 2>/dev/null && printf '%s\n' "$rel" >> "$PRE_LIST"
+    done
+  fi
+  rm -f "$GUARD_DIR/pre.raw"
+fi
+
+# 거부가 날 때 부모의 미커밋 작업을 되돌린다. 무엇을 되돌렸는지 돌려준다.
+restore_dirty() {
+  [ -s "$PRE_LIST" ] || return 0
+  local back=""
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    [ -f "$PRE_DIR/$rel" ] || continue
+    if ! cmp -s "$PRE_DIR/$rel" "$CWD/$rel" 2>/dev/null; then
+      mkdir -p "$GUARD_DIR/at-exit/$(dirname "$rel")" 2>/dev/null
+      cp "$CWD/$rel" "$GUARD_DIR/at-exit/$rel" 2>/dev/null
+      cp "$PRE_DIR/$rel" "$CWD/$rel" 2>/dev/null && back="$back $rel"
+    fi
+  done < "$PRE_LIST"
+  printf '%s' "$back"
+}
+
 # ── ⑥ 슬롯 · 정리 ───────────────────────────────────────────────────────────
 release_all() {
   sem_release
@@ -488,7 +530,26 @@ b, a = fp(before_p), fp(after_p)
 touched = set(p for p, dg in a.items() if b.get(p) != dg)
 touched |= set(p for p in b if p not in a)          # 삭제도 변경이다
 
-outside = sorted(p for p in touched if not is_test(p) and p not in self_made)
+# ⭐⭐ 자식이 **대조군을 만들려고** 남기는 임시 백업은 범위 밖으로 세지 않는다 (2026-09-15).
+#   산출 계약은 「보호를 깨서 붉어지는 것을 관측하라」를 요구하고, 자식은 그러려면 원본을
+#   먼저 백업한다. 그 백업이 rc 66 에 걸리면 **계약이 요구한 행동을 가드가 벌하는** 꼴이다.
+#   실측으로 한 호출이 `rulePresets.ts.bak` 하나 때문에 거부됐다 — 원본과 차이 0 이었고
+#   대조군 2/2 가 실제로 붉어졌는데도 그랬다.
+#   ⚠ 그 대신 **남겨 두지는 않는다.** 아래에서 목록으로 뽑아 셸이 지운다(작업 트리 오염 금지).
+SCRATCH = ("*.bak", "*.orig", "*.rej", "*~", "*.cgbak")
+
+
+def is_scratch(path):
+    base = path.split("/")[-1]
+    return any(fnmatch.fnmatch(base, s) for s in SCRATCH)
+
+
+scratch = sorted(p for p in touched if is_scratch(p) and p not in b)
+if scratch:
+    io.open(out + ".scratch", "w", encoding="utf-8").write("\n".join(scratch) + "\n")
+
+outside = sorted(p for p in touched
+                 if not is_test(p) and p not in self_made and p not in set(scratch))
 if outside:
     sys.stderr.write("테스트 패턴 밖 변경: %s" % ",".join(outside[:8]))
     sys.exit(66)
@@ -512,10 +573,21 @@ if mode in ("full", "write") and test_touched:
 PYVERIFY
 V_RC=$?
 V_MSG="$(head -3 "$VERIFY_ERR" 2>/dev/null | tr '\n' ' ')"
+
+# ⭐ 자식이 대조군용으로 남긴 임시 백업을 지운다 — 허용했다고 트리에 남겨 두지는 않는다.
+if [ -f "$OUT.scratch" ]; then
+  while IFS= read -r rel; do
+    [ -n "$rel" ] && rm -f "$CWD/$rel" 2>/dev/null
+  done < "$OUT.scratch"
+  rm -f "$OUT.scratch"
+fi
 case "$V_RC" in
   0)  : ;;
   65) fail_json 65 "schema_violation: ${V_MSG}" ;;
-  66) fail_json 66 "wrote_outside_test_paths: ${V_MSG}(스냅샷 방식=$SCOPE_METHOD)" ;;
+  66)
+     # ⭐ 거부하기 전에 부모의 미커밋 작업을 되돌린다. 그러지 않으면 자식이 덮어쓴 채로 남는다.
+     BACK="$(restore_dirty)"
+     fail_json 66 "wrote_outside_test_paths: ${V_MSG}(스냅샷 방식=$SCOPE_METHOD)${BACK:+ · 부모 미커밋 복원:$BACK}" ;;
   67) fail_json 67 "control_group_missing: ${V_MSG}" ;;
   *)  fail_json 65 "validation_failed(rc=$V_RC) ${V_MSG}" ;;
 esac
