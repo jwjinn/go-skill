@@ -62,7 +62,11 @@ def main() -> int:
     shared = {p: ws for p, ws in crossed.items() if SHARED_RE.match(p)}
     real = {p: ws for p, ws in crossed.items() if p not in shared}
 
+    # ⚠ 공용 장부는 「합치는 대상」이지만 **조용히 넘기지 않는다.** 매 파도에서 같은 파일이
+    #   겹치면 그것은 배치를 바꿀 신호다(SKILL.md 「장부는 겹친다」 절). 이름을 찍는다.
     print("SHARED %d" % len(shared))
+    for q in sorted(shared):
+        print("SHARED-FILE\t%s\t%s" % (q, ",".join(sorted(shared[q]))))
     for p in sorted(real):
         print("%s\t%s" % (p, ",".join(sorted(real[p]))))
     return 1 if real else 0

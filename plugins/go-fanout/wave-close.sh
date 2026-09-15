@@ -200,7 +200,10 @@ else
     printf '%s\n' "$CROSS_OUT" | head -1 | while read -r _ n; do
       [ "${n:-0}" -gt 0 ] 2>/dev/null && printf '  · 공용 산출물 %s건(합치는 대상이지 충돌이 아니다)\n' "$n"
     done
-    REAL="$(printf '%s\n' "$CROSS_OUT" | tail -n +2)"
+    # 공용 장부는 이름까지 보여 준다 — 매 파도에서 같은 파일이 겹치면 배치를 바꿀 신호다.
+    printf '%s\n' "$CROSS_OUT" | grep '^SHARED-FILE' | sed 's/^SHARED-FILE\t/        · /' | head -8
+    # ⚠ `SHARED` 머리줄과 `SHARED-FILE` 줄을 빼야 **진짜 소스 교차**만 남는다.
+    REAL="$(printf '%s\n' "$CROSS_OUT" | grep -v '^SHARED')"
     if [ -n "$REAL" ]; then
       printf '%s\n' "$REAL" | sed 's/^/        /' | head -10
       blocked "두 워커가 **같은 소스 파일**을 고쳤다 — 합치기 전에 판단이 필요하다"
