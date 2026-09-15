@@ -11,6 +11,7 @@
    그 상태에서 tester.sh 는 프록시조차 띄우지 않는다. 「묻지 않고 지나가는 경로」가
    켜지는 쪽으로 열리면 「기본은 안 씀」이 거짓이 된다.
 """
+import hashlib
 import io
 import json
 import os
@@ -63,11 +64,23 @@ def merged(argv):
     return base, path, origin
 
 
+def plan_fingerprint(plan_file):
+    """계획을 식별하는 값 — **내용 해시**다.
+
+    ⛔ 종전에는 계획 파일의 **경로**로 묶었는데, 그 경로는 모든 계획이 공유하는 상수
+      (`.claude/plan-active.md`)다. 그래서 앞 계획의 옵트인이 남아 있으면 다음 계획이
+      묻지도 않고 켜졌다 — 「기본은 안 씀 · 계획마다 묻는다」가 거짓이 되는 자리였고,
+      리뷰가 지목했다. 자원 회수(C3)의 삭제 절차에만 기대던 것을 값으로 바꾼다.
+    """
+    try:
+        with io.open(plan_file, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:16]
+    except Exception:
+        return ""
+
+
 def optin_state(cfg, project_root, plan_file):
     """옵트인 기록을 읽어 **이 계획에 대해** 켜졌는지 판정한다.
-
-    ⭐ 계획 파일 경로에 묶는 이유: 옵트인이 다음 계획으로 조용히 이어지면
-      「기본은 안 씀」이 거짓이 된다. 사용자는 계획마다 답한다.
 
     반환: (켜졌나, 사유)
     """
@@ -80,11 +93,27 @@ def optin_state(cfg, project_root, plan_file):
         return False, "optin_unreadable(%s)" % e
     if d.get("answer") != "use":
         return False, "opted_out(기록된 답: %s)" % d.get("answer")
-    recorded = d.get("plan_file") or ""
-    if plan_file and recorded and os.path.abspath(recorded) != os.path.abspath(plan_file):
-        # ⚠ 다른 계획의 옵트인이다. 이어 쓰지 않는다.
-        return False, "optin_for_other_plan(기록=%s)" % recorded
-    return True, "opted_in(heartbeat %s)" % (d.get("heartbeat_at") or "시각 미기록")
+
+    recorded_path = d.get("plan_file") or ""
+    # ⚠ 경로 기록이 **없으면 거부**한다. 종전에는 빈 값이면 비교를 건너뛰어 승인했는데,
+    #   그러면 필드를 빠뜨린 기록이 무조건 통과한다(fail-open · 리뷰가 지목).
+    if not recorded_path:
+        return False, "optin_without_plan(기록에 plan_file 이 없다 — 어느 계획의 답인지 알 수 없다)"
+    if plan_file and os.path.abspath(recorded_path) != os.path.abspath(plan_file):
+        return False, "optin_for_other_plan(기록=%s)" % recorded_path
+
+    # ⭐ 경로가 같아도 **계획이 바뀌었으면** 다른 계획이다. 내용 해시로 가른다.
+    recorded_fp = d.get("plan_fingerprint") or ""
+    if not recorded_fp:
+        return False, ("optin_without_fingerprint(기록에 plan_fingerprint 가 없다 — "
+                       "경로만으로는 앞 계획의 잔재와 구분할 수 없다. `/go` 가 다시 묻고 새로 쓴다)")
+    now_fp = plan_fingerprint(plan_file)
+    if not now_fp:
+        return False, "plan_unreadable(계획 파일을 읽지 못해 옵트인을 대조할 수 없다)"
+    if recorded_fp != now_fp:
+        return False, ("optin_stale(계획이 그 답 이후로 바뀌었다 — 기록 %s ≠ 지금 %s. "
+                       "다시 물어라)" % (recorded_fp, now_fp))
+    return True, "opted_in(heartbeat %s · 계획 %s)" % (d.get("heartbeat_at") or "시각 미기록", now_fp)
 
 
 def main():
@@ -138,6 +167,7 @@ def main():
     pats = cfg.get("test_path_patterns") or []
     print("TESTER_TEST_PATTERNS=%s" % q("|".join(pats)))
     print("TESTER_PLAN_FILE=%s" % q(plan_file))
+    print("TESTER_PLAN_FINGERPRINT=%s" % q(plan_fingerprint(plan_file)))
 
 
 if __name__ == "__main__":

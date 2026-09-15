@@ -15,22 +15,20 @@
 #   ③ `--allowedTools ""` 는 `bypassPermissions` 에서 **도구를 막지 못한다.** 막는 것은
 #      `--tools` 다. ②가 일어난 조건이 정확히 이것이었다.
 #   ⇒ 세 통제가 다 여기 있고, 그 위에 **부모 계획·리뷰 파일 해시 대조**를 한 겹 더 둔다.
-#      통제가 하나라도 조용히 깨졌을 때 그것을 알아차릴 유일한 방법이기 때문이다.
 #
 # 사용:
 #   tester.sh --task <지시서 파일> [--mode run|write|full] [--cwd <레포>] [--out <산출.json>]
 #             [--gate '<게이트 명령>'] [--label <라벨>]
 #
 # 종료코드:
-#   0   정상 — 스키마를 통과한 JSON 을 냈다
+#   0   정상 — 스키마를 통과한 JSON 을 냈다(stdout 은 그 JSON **하나뿐**이다)
 #   64  사용법 오류
-#   65  산출이 무효(JSON 이 아니거나 필수 필드 누락)
-#   66  테스트 파일 밖을 고쳤다
-#   67  대조군 누락(mode=full 인데 발화한 대조군이 0건)
+#   65  산출이 무효(JSON 이 아니거나 스키마 불충족)
+#   66  테스트 파일 밖을 고쳤다 · 또는 쓰기 범위를 **검사하지 못했다**
+#   67  대조군 누락(테스트 파일이 바뀌었는데 발화한 대조군이 0건)
 #   68  부모 계획·리뷰 파일이 훼손됐다(원본을 복원했다)
 #   70  쓸 수 없다 — 꺼졌거나·옵트인 없음·heartbeat 불가·슬롯 대기 초과·**업스트림 거부**
-#       (⭐ heartbeat 는 통과했는데 본 작업이 403/401/429 로 막히는 경우가 실재한다 —
-#        게이트웨이 가드가 긴 요청만 차단하는 조건을 2026-09-15 에 실측했다)
+#       (⭐ heartbeat 는 통과했는데 본 작업이 403/401/429 로 막히는 경우가 실재한다)
 set -u
 
 SELF="$(cd "$(dirname "$0")" && pwd)"
@@ -56,10 +54,43 @@ LABEL="${LABEL:-$(date +%Y%m%d-%H%M%S)-$$}"
 OUT="${OUT:-${TMPDIR:-/tmp}/go-tester/result-$LABEL.json}"
 mkdir -p "$(dirname "$OUT")"
 
+# ⭐ `timeout` 은 이름이 둘이고 macOS 에는 기본 설치가 없다. 없으면 **상한 없이** 부른다 —
+#   「없는 명령이라 위임이 통째로 안 돌았는데 산출 오류로 보고되는」 것보다 낫다(리뷰 g5).
+TIMEOUT_CMD=""
+if command -v timeout >/dev/null 2>&1; then TIMEOUT_CMD="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT_CMD="gtimeout"
+fi
+
+GUARD_DIR=""
+LEDGER_PATH=""
+KEEP_GUARD=0
+
+ledger_append() { # ledger_append <rc> <사유>
+  # ⭐ **실패도 원장에 남긴다**(리뷰 g2). 성공만 기록하면 폴백률의 분자가 구조적으로 0 이고,
+  #   그러면 「폴백 0회」가 「폴백이 없었다」인지 「기록이 안 됐다」인지 갈리지 않는다.
+  [ -n "$LEDGER_PATH" ] || return 0
+  mkdir -p "$(dirname "$LEDGER_PATH")" 2>/dev/null || return 0
+  python3 - "$LEDGER_PATH" "$LABEL" "$MODE" "${TESTER_MODEL:-}" "$1" "$2" <<'PYL' 2>/dev/null || true
+import io, json, sys, datetime
+ledger, label, mode, model, rc, reason = sys.argv[1:7]
+row = {
+    "at": datetime.datetime.now().isoformat(timespec="seconds"),
+    "label": label, "mode": mode, "model": model,
+    "rc": int(rc), "reason": reason[:300],
+}
+with io.open(ledger, "a", encoding="utf-8") as f:
+    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+PYL
+}
+
 fail_json() { # fail_json <rc> <사유>
   KEEP_GUARD=1
+  # ⚠ 보존 경로를 **모든 실패 사유**에 싣는다(리뷰). 종전에는 파싱 실패에만 있었다.
+  local why="$2"
+  if [ -n "$GUARD_DIR" ] && [ -d "$GUARD_DIR" ]; then why="$why · 보존: $GUARD_DIR"; fi
   python3 -c 'import json,sys;print(json.dumps({"mode":sys.argv[1],"commands":[],"passed":0,"failed":0,"skipped":0,"failures":[],"tests_written":[],"control_group":[],"files_changed":[],"notes":"","unavailable_reason":sys.argv[2]},ensure_ascii=False))' \
-    "$MODE" "$2" > "$OUT"
+    "$MODE" "$why" > "$OUT"
+  ledger_append "$1" "$why"
   cat "$OUT"
   exit "$1"
 }
@@ -69,10 +100,11 @@ fail_json() { # fail_json <rc> <사유>
 # ── ① 켤 수 있나 ─────────────────────────────────────────────────────────────
 CFG_OUT="$(CLAUDE_PROJECT_DIR="$CWD" python3 "$SELF/_config.py" 2>/dev/null)"
 eval "$(printf '%s' "$CFG_OUT" | grep -E '^TESTER_[A-Z_]+=' | sed 's/^/export /')"
+LEDGER_PATH="$CWD/${TESTER_LEDGER:-.claude/tester/tester.jsonl}"
 
 if [ "${TESTER_ENABLED:-0}" != "1" ]; then
   # ⭐ 여기가 fail-closed 지점이다. 묻지 않았거나·답이 「쓴다」가 아니거나·구성이 off 면
-  #   **프록시조차 띄우지 않고** 멈춘다. 「기본은 안 씀」이 프로세스 수준에서도 참이어야 한다.
+  #   **프록시조차 띄우지 않고** 멈춘다.
   fail_json 70 "${TESTER_REASON:-unavailable}"
 fi
 
@@ -86,22 +118,40 @@ except Exception: print("probe 산출을 읽지 못했다")' 2>/dev/null)"
   fail_json 70 "heartbeat_failed: $reason"
 fi
 
-# probe 가 프록시를 내렸다 — 본 실행을 위해 다시 띄우고, 우리가 띄웠으면 끝에 내린다.
-PROXY_MINE=0
+# ── ③ 프록시 — **참조 카운트**로 공유한다 ───────────────────────────────────
+# ⛔ 종전에는 「내가 띄웠으면 내가 내린다」였고, 그래서 먼저 끝난 호출이 **아직 돌고 있는
+#   형제 호출의 프록시를 죽였다**(리뷰 g13). 자식은 그 순간부터 엔드포인트에 닿지 못해
+#   빈 산출을 내고, 우리는 그것을 rc 65 「지시서 문제」로 보고했다 — 원인을 반대로 지목한다.
+PROXY_USERS="${TMPDIR:-/tmp}/go-tester/users-${TESTER_PROXY_PORT:-4141}"
+mkdir -p "$PROXY_USERS"
+USER_MARK="$PROXY_USERS/$$"
+
+proxy_users_count() {
+  local n=0 m p
+  for m in "$PROXY_USERS"/*; do
+    [ -e "$m" ] || continue
+    p="$(basename "$m")"
+    case "$p" in *[!0-9]*) rm -f "$m"; continue ;; esac
+    if kill -0 "$p" 2>/dev/null; then n=$((n + 1)); else rm -f "$m"; fi
+  done
+  printf '%s' "$n"
+}
+
+: > "$USER_MARK"
 if ! bash "$SELF/proxy.sh" status --port "$TESTER_PROXY_PORT" >/dev/null 2>&1; then
   if ! bash "$SELF/proxy.sh" start --port "$TESTER_PROXY_PORT" --endpoint "$TESTER_ENDPOINT" \
          --model "$TESTER_MODEL" --key "$TESTER_PROXY_KEY" >/dev/null 2>&1; then
+    rm -f "$USER_MARK"
     fail_json 70 "proxy_start_failed(heartbeat 는 통과했는데 본 실행용 기동에 실패했다)"
   fi
-  PROXY_MINE=1
 fi
 
-# ── ③ 부모 계획·리뷰 파일의 지문 ─────────────────────────────────────────────
-# 실측 ②의 방어. 자식이 게이트를 빠져나가려 이 파일들을 고치면 여기서 잡는다.
+# ── ④ 부모 계획·리뷰 파일의 지문 ─────────────────────────────────────────────
 PLAN_F="${CLAUDE_PLAN_FILE:-$CWD/.claude/plan-active.md}"
 REVIEW_F="${CLAUDE_REVIEW_FILE:-$CWD/.claude/review-active.md}"
 GUARD_DIR="${TMPDIR:-/tmp}/go-tester/guard-$LABEL"
 mkdir -p "$GUARD_DIR"
+
 snap() { # snap <파일> <이름>
   [ -f "$1" ] || return 0
   cp "$1" "$GUARD_DIR/$2.bak"
@@ -112,15 +162,22 @@ changed() { # changed <파일> <이름> → 0=바뀌었다
   [ -f "$1" ] || return 0
   [ "$(shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1)" != "$(cat "$GUARD_DIR/$2.sha")" ]
 }
+restore_parents() {
+  # ⭐ 신호로 죽을 때도 **복원이 먼저**다(리뷰 g10). 종전 트랩은 백업이 든 GUARD_DIR 을
+  #   지우고 끝나서, INT·TERM 경로에서는 자식이 고친 계획 파일이 그대로 남았다.
+  local restored=""
+  if changed "$PLAN_F" plan;     then cp "$GUARD_DIR/plan.bak"   "$PLAN_F";   restored="$restored plan-active.md"; fi
+  if changed "$REVIEW_F" review; then cp "$GUARD_DIR/review.bak" "$REVIEW_F"; restored="$restored review-active.md"; fi
+  printf '%s' "$restored"
+}
 snap "$PLAN_F" plan
 snap "$REVIEW_F" review
 
-# ── ④ 변경 전 스냅샷 ─────────────────────────────────────────────────────────
-# ⛔ 여기가 fail-open 이 되기 쉬운 자리다. 첫 판은 git 레포가 아니면 빈 목록을 만들었고,
-#   그러면 「변경 없음」이 되어 **쓰기 범위 검사가 무조건 통과**했다. 검사하지 않은 것과
-#   통과한 것은 다르다 — 이 체인이 반복해서 잡는 부류라 스스로 밟을 수는 없다.
-#   ⇒ git 이 아니면 파일 경로·크기·mtime 으로 직접 스냅샷을 뜬다. 파일이 너무 많으면
-#     그 사실을 `SCOPE_METHOD=none` 으로 남겨 「미검사」가 「통과」로 읽히지 않게 한다.
+# ── ⑤ 변경 전 스냅샷 ─────────────────────────────────────────────────────────
+# ⛔ 여기가 fail-open 이 되기 쉬운 자리다. 첫 판은 git 이 아니면 빈 목록을 만들었고, 두 번째
+#   판은 **경로 이름만** 담아서 「이미 더티인 파일을 자식이 더 고치는」 경우를 놓쳤다
+#   (리뷰 g3 — 정상 흐름이 「구현(미커밋) → 그 코드의 테스트를 위임」이라 흔한 조건이다).
+#   ⇒ 경로가 아니라 **내용 지문**을 담고, 양방향으로 비교해 삭제도 잡는다(g16).
 IS_GIT=0
 git -C "$CWD" rev-parse --show-toplevel >/dev/null 2>&1 && IS_GIT=1
 BEFORE="$GUARD_DIR/before.txt"
@@ -128,41 +185,63 @@ AFTER="$GUARD_DIR/after.txt"
 SCOPE_METHOD="git"
 FILE_CAP=20000
 
-snapshot() { # snapshot <산출 파일>
+digest_of() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
+
+snapshot() { # snapshot <산출 파일> — "<경로>\t<지문>" 한 줄씩
   if [ "$IS_GIT" = "1" ]; then
-    git -C "$CWD" -c core.quotePath=false status --porcelain 2>/dev/null \
-      | sed 's/^...//' | sed 's/^"//; s/"$//' | sort > "$1"
+    SCOPE_METHOD="git"
+    {
+      git -C "$CWD" -c core.quotePath=false ls-files -z 2>/dev/null \
+        | while IFS= read -r -d '' rel; do
+            if [ -f "$CWD/$rel" ]; then printf '%s\t%s\n' "$rel" "$(digest_of "$CWD/$rel")"
+            else printf '%s\t__MISSING__\n' "$rel"; fi
+          done
+      git -C "$CWD" -c core.quotePath=false ls-files -z --others --exclude-standard 2>/dev/null \
+        | while IFS= read -r -d '' rel; do
+            [ -f "$CWD/$rel" ] && printf '%s\t%s\n' "$rel" "$(digest_of "$CWD/$rel")"
+          done
+    } | sort > "$1"
     return 0
   fi
   n=$(find "$CWD" -type f -not -path '*/.git/*' 2>/dev/null | head -n $((FILE_CAP + 1)) | wc -l | tr -d ' ')
   if [ "$n" -gt "$FILE_CAP" ]; then
     SCOPE_METHOD="none"
-    printf '__TOO_MANY_FILES__\n' > "$1"
+    printf '__TOO_MANY_FILES__\t0\n' > "$1"
     return 0
   fi
   SCOPE_METHOD="fs"
-  ( cd "$CWD" && { find . -type f -not -path './.git/*' -exec stat -f '%N %z %m' {} + 2>/dev/null \
-      || find . -type f -not -path './.git/*' -exec stat -c '%n %s %Y' {} + 2>/dev/null ; } ) | sort > "$1"
+  ( cd "$CWD" && find . -type f -not -path './.git/*' -print 2>/dev/null ) \
+    | while IFS= read -r rel; do
+        printf '%s\t%s\n' "${rel#./}" "$(digest_of "$CWD/${rel#./}")"
+      done | sort > "$1"
 }
 snapshot "$BEFORE"
 
-# ── ⑤ 슬롯 ──────────────────────────────────────────────────────────────────
-if ! sem_acquire "${TESTER_MAX_CONCURRENCY:-4}" 900; then
-  [ "$PROXY_MINE" = "1" ] && bash "$SELF/proxy.sh" stop --port "$TESTER_PROXY_PORT" >/dev/null 2>&1
-  fail_json 70 "semaphore_timeout(동시 상한 ${TESTER_MAX_CONCURRENCY:-4} 에서 900초 대기 후 포기)"
-fi
-# ⚠ 실패했을 때 자식의 원본 산출을 지우면 **원인을 영영 못 본다.** 첫 판이 그랬고,
-#   「자식이 JSON 을 안 냈다」까지만 알고 무엇을 냈는지는 알 수 없었다. 성공이면 치우고
-#   실패면 남긴다 — 남긴 경로는 사유에 적어 사람이 바로 열 수 있게 한다.
-KEEP_GUARD=0
+# ── ⑥ 슬롯 · 정리 ───────────────────────────────────────────────────────────
 release_all() {
   sem_release
-  [ "${PROXY_MINE:-0}" = "1" ] && bash "$SELF/proxy.sh" stop --port "${TESTER_PROXY_PORT:-4141}" >/dev/null 2>&1
+  rm -f "$USER_MARK" 2>/dev/null
+  # 마지막 사용자가 나갈 때만 프록시를 내린다.
+  if [ "$(proxy_users_count)" = "0" ]; then
+    bash "$SELF/proxy.sh" stop --port "${TESTER_PROXY_PORT:-4141}" >/dev/null 2>&1
+  fi
   [ "${KEEP_GUARD:-0}" = "1" ] || rm -rf "$GUARD_DIR" 2>/dev/null
 }
-trap 'release_all' EXIT INT TERM
+on_signal() {
+  r="$(restore_parents)"
+  [ -n "$r" ] && echo "tester.sh: 신호로 중단 — 부모 파일 복원:$r" >&2
+  ledger_append 143 "interrupted${r:+ · 복원:$r}"
+  release_all
+  exit 143
+}
+trap 'release_all' EXIT
+trap 'on_signal' INT TERM
 
-# ── ⑥ 자식 실행 ─────────────────────────────────────────────────────────────
+if ! sem_acquire "${TESTER_MAX_CONCURRENCY:-4}" 900; then
+  fail_json 70 "semaphore_timeout(동시 상한 ${TESTER_MAX_CONCURRENCY:-4} 에서 900초 대기 후 포기)"
+fi
+
+# ── ⑦ 자식 실행 ─────────────────────────────────────────────────────────────
 SCHEMA="$(cat "$SELF/result-schema.json")"   # ⚠ --json-schema 는 **경로가 아니라 JSON 문자열**이다(실측)
 PROMPT="$(cat "$TASK")"
 if [ -n "$GATE" ]; then
@@ -176,6 +255,11 @@ PROMPT="$PROMPT
 MODE: $MODE
 TEST FILE PATTERNS you may create or edit (anything else is rejected by the caller):
   $(printf '%s' "${TESTER_TEST_PATTERNS:-}" | tr '|' ' ')
+
+CONTROL GROUP COMMAND (this is the CONTROLGROUP <...> your instructions refer to)
+  bash $SELF/controlgroup.sh --repo $CWD --file <source file> --sed '<sed expression>' --gate '${GATE:-<gate command>}'
+It mutates a throwaway copy of the tree, never this working tree, and prints one JSON line
+with went_red. Use it instead of editing any source file yourself.
 
 OUTPUT CONTRACT (the caller parses this and rejects anything else)
 Your final message must be ONE JSON object and nothing else - no prose before or after,
@@ -200,41 +284,39 @@ t0=$(python3 -c 'import time;print(time.time())')
   done
   export DISABLE_TELEMETRY=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
   # ⚠ 우회 두 줄 — `--setting-sources ""` 가 이미 훅을 막지만, 누군가 그 플래그를 지웠을 때
-  #   자식이 부모 계획을 붙잡지 않도록 이중으로 둔다(③의 해시 대조가 세 번째 겹이다).
+  #   자식이 부모 계획을 붙잡지 않도록 이중으로 둔다(④의 해시 대조가 세 번째 겹이다).
   export CLAUDE_PLAN_FILE="$GUARD_DIR/none-plan.md"
   export CLAUDE_REVIEW_FILE="$GUARD_DIR/none-review.md"
-  timeout "${TESTER_TIMEOUT:-900}" claude -p "$PROMPT" \
-    --model "$TESTER_MODEL" \
-    --output-format json \
-    --json-schema "$SCHEMA" \
+  set -- claude -p "$PROMPT" \
+    --model "$TESTER_MODEL" --output-format json --json-schema "$SCHEMA" \
     --append-system-prompt "$(cat "$SELF/system-prompt.md")" \
-    --permission-mode bypassPermissions \
-    --tools "${TESTER_TOOLS:-Read,Write,Edit,Bash,Glob,Grep}" \
-    --setting-sources "" \
-    --no-session-persistence \
-    --max-turns 80 \
-    > "$CHILD_OUT" 2> "$CHILD_ERR"
+    --permission-mode bypassPermissions --tools "${TESTER_TOOLS:-Read,Write,Edit,Bash,Glob,Grep}" \
+    --setting-sources "" --no-session-persistence --max-turns 80
+  if [ -n "$TIMEOUT_CMD" ]; then
+    "$TIMEOUT_CMD" "${TESTER_TIMEOUT:-900}" "$@" > "$CHILD_OUT" 2> "$CHILD_ERR"
+  else
+    "$@" > "$CHILD_OUT" 2> "$CHILD_ERR"
+  fi
 )
 CHILD_RC=$?
 t1=$(python3 -c 'import time;print(time.time())')
 ELAPSED=$(python3 -c "print(round($t1-$t0,1))")
 
-# ── ⑦ 부모 파일 훼손 검사 (다른 판정보다 앞선다) ────────────────────────────
-RESTORED=""
-if changed "$PLAN_F" plan;     then cp "$GUARD_DIR/plan.bak"   "$PLAN_F";   RESTORED="$RESTORED plan-active.md"; fi
-if changed "$REVIEW_F" review; then cp "$GUARD_DIR/review.bak" "$REVIEW_F"; RESTORED="$RESTORED review-active.md"; fi
+# ── ⑧ 부모 파일 훼손 검사 (다른 판정보다 앞선다) ────────────────────────────
+RESTORED="$(restore_parents)"
 if [ -n "$RESTORED" ]; then
   fail_json 68 "parent_files_modified:$RESTORED (원본을 복원했다 — 자식이 완주 게이트를 빠져나가려 한 것으로 보인다)"
 fi
 
-# ── ⑧ 산출 파싱 ─────────────────────────────────────────────────────────────
+# ── ⑨ 산출 파싱 ─────────────────────────────────────────────────────────────
 python3 - "$CHILD_OUT" "$OUT" "$ELAPSED" <<'PYPARSE'
 import io, json, sys
 child, out, elapsed = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     d = json.load(io.open(child, encoding="utf-8"))
 except Exception as e:
-    json.dump({"_error": "child_json_unreadable: %s" % e}, io.open(out, "w", encoding="utf-8"))
+    json.dump({"_error": "child_json_unreadable", "_detail": str(e), "_raw": ""},
+              io.open(out, "w", encoding="utf-8"))
     sys.exit(3)
 r = d.get("result")
 try:
@@ -242,85 +324,66 @@ try:
     if not isinstance(inner, dict):
         raise ValueError("result 가 객체가 아니다")
 except Exception as e:
-    json.dump({"_error": "result_not_json: %s" % e, "_raw": str(r)[:400]}, io.open(out, "w", encoding="utf-8"))
+    json.dump({"_error": "result_not_json", "_detail": str(e), "_raw": str(r)[:400]},
+              io.open(out, "w", encoding="utf-8"))
     sys.exit(4)
 u = d.get("usage") or {}
-inner["_meta"] = {
-    "elapsed_sec": float(elapsed),
-    "turns": d.get("num_turns"),
-    "subtype": d.get("subtype"),
-    "input_tokens": u.get("input_tokens"),
-    "output_tokens": u.get("output_tokens"),
+# ⚠ `_meta` 는 스키마에 없다(additionalProperties:false). 산출에 섞으면 우리 자신이 계약을
+#   깬다(리뷰 g17) ⇒ 곁 파일에 쓴다. 원장이 그 파일을 읽는다.
+meta = {
+    "elapsed_sec": float(elapsed), "turns": d.get("num_turns"), "subtype": d.get("subtype"),
+    "input_tokens": u.get("input_tokens"), "output_tokens": u.get("output_tokens"),
 }
+json.dump(meta, io.open(out + ".meta.json", "w", encoding="utf-8"), ensure_ascii=False)
 json.dump(inner, io.open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 PYPARSE
 PARSE_RC=$?
 if [ "$PARSE_RC" -ne 0 ]; then
-  why="$(python3 -c 'import json,sys
-d=json.load(open(sys.argv[1]))
-e=d.get("_error","")
-raw=(d.get("_raw") or "").strip().replace(chr(10)," ")
-print(e + (" | 자식이 낸 것: " + raw[:220] if raw else ""))' "$OUT" 2>/dev/null)"
-  # ⭐ 업스트림이 거부한 것과 모델이 형식을 못 지킨 것을 **가른다.** 고칠 곳이 다르다:
-  #   앞은 엔드포인트·정책(사람이 판단) · 뒤는 지시서(구현자가 고친다).
-  #   실측(2026-09-15): 이 클러스터 게이트웨이의 가드가 특정 레포 문맥의 요청을
-  #   403 jailbreak 로 차단했고, heartbeat(짧은 ping)는 그대로 통과했다.
-  case "$why" in
-    *"fabrix-guard"*|*"보안 정책"*|*"403"*|*"401"*|*"AuthenticationError"*|*"rate_limit"*|*"429"*|*"Failed to authenticate"*)
-      fail_json 70 "upstream_rejected: ${why} (heartbeat 는 통과했지만 본 작업이 거부됐다 — 엔드포인트·정책 문제이지 지시서 문제가 아니다 · 보존: $GUARD_DIR)" ;;
+  # ⭐ 업스트림 거부와 모델의 형식 오류를 **가른다.** 고칠 곳이 다르다.
+  #   ⚠ 종전에는 사유 문자열 전체에 `*403*` 을 걸어서 파서의 오류 위치(`char 401`)까지
+  #     HTTP 상태로 읽었다(리뷰 g19). ⇒ **자식이 낸 원문만** 보고, 숫자는 단독으로 보지 않는다.
+  RAW="$(python3 -c 'import json,sys
+try: print((json.load(open(sys.argv[1])).get("_raw") or "").replace(chr(10)," ")[:400])
+except Exception: print("")' "$OUT" 2>/dev/null)"
+  DETAIL="$(python3 -c 'import json,sys
+try:
+    d=json.load(open(sys.argv[1])); print(d.get("_error","") + ((": " + d.get("_detail","")) if d.get("_detail") else ""))
+except Exception: print("산출을 읽지 못했다")' "$OUT" 2>/dev/null)"
+  case "$RAW" in
+    *"fabrix-guard"*|*"보안 정책"*|*"Failed to authenticate"*|*"AuthenticationError"*|\
+    *"API Error: 403"*|*"API Error: 401"*|*"API Error: 429"*|*"status 403"*|*"status 401"*|\
+    *"status 429"*|*"rate_limit"*|*"PermissionDenied"*|*"insufficient_quota"*)
+      fail_json 70 "upstream_rejected: $(printf '%s' "$RAW" | cut -c1-220) (heartbeat 는 통과했지만 본 작업이 거부됐다 — 엔드포인트·정책 문제이지 지시서 문제가 아니다)" ;;
   esac
-  fail_json 65 "invalid_output: ${why:-산출을 읽지 못했다} (자식 rc=$CHILD_RC · 보존: $GUARD_DIR)"
+  fail_json 65 "invalid_output: ${DETAIL:-산출을 읽지 못했다}$( [ -n "$RAW" ] && printf ' | 자식이 낸 것: %s' "$(printf '%s' "$RAW" | cut -c1-220)" )(자식 rc=$CHILD_RC)"
 fi
 
-# ── ⑨ 스키마·대조군·쓰기 범위 검증 ──────────────────────────────────────────
+# ── ⑩ 스키마·쓰기 범위·대조군 검증 ──────────────────────────────────────────
 snapshot "$AFTER"
 
-# ⚠ 우리 자신이 만든 파일(--out 산출·지시서)을 자식의 위반으로 세지 마라 —
-#   「탐지기가 자기 그림자를 잡는」 부류다. 레포 안에 있으면 상대경로로 제외한다.
+# ⚠ 우리 자신이 만든 파일(--out 산출·지시서)을 자식의 위반으로 세지 마라.
 SELF_MADE=""
-case "$OUT" in "$CWD"/*) SELF_MADE="${OUT#$CWD/}" ;; esac
+case "$OUT" in "$CWD"/*) SELF_MADE="${OUT#$CWD/}|${OUT#$CWD/}.meta.json" ;; esac
 case "$TASK" in "$CWD"/*) SELF_MADE="$SELF_MADE|${TASK#$CWD/}" ;; esac
 
-python3 - "$OUT" "$SELF/result-schema.json" "$BEFORE" "$AFTER" "${TESTER_TEST_PATTERNS:-}" "$MODE" "$SCOPE_METHOD" "$SELF_MADE" <<'PYVERIFY'
+VERIFY_ERR="$GUARD_DIR/verify.err"
+python3 - "$OUT" "$SELF/result-schema.json" "$BEFORE" "$AFTER" "${TESTER_TEST_PATTERNS:-}" "$MODE" "$SCOPE_METHOD" "$SELF_MADE" 2> "$VERIFY_ERR" <<'PYVERIFY'
 import fnmatch, io, json, sys
 out, schema_p, before_p, after_p, pats, mode, scope_method = sys.argv[1:8]
 self_made = set(x for x in (sys.argv[8] if len(sys.argv) > 8 else "").split("|") if x)
 d = json.load(io.open(out, encoding="utf-8"))
 schema = json.load(io.open(schema_p, encoding="utf-8"))
 
+# ── 스키마: 필수 키 + **금지된 여분 키**(additionalProperties:false 를 우리도 지킨다)
 missing = [k for k in schema.get("required", []) if k not in d]
 if missing:
-    sys.stderr.write("필수 필드 누락: %s\n" % ",".join(missing))
+    sys.stderr.write("필수 필드 누락: %s" % ",".join(missing))
     sys.exit(65)
-
-# ⭐ 대조군: mode=full 이고 테스트를 썼으면 발화한 대조군이 있어야 한다.
-if mode == "full" and d.get("tests_written"):
-    red = [c for c in (d.get("control_group") or []) if c.get("went_red") is True]
-    if not red:
-        sys.stderr.write("tests_written=%d 인데 went_red 인 대조군이 0건\n" % len(d["tests_written"]))
-        sys.exit(67)
-
-# ⭐ 쓰기 범위: 스냅샷이 본 실제 변경이 테스트 패턴 안인가. 모델의 files_changed 를 믿지 않는다.
-if scope_method == "none":
-    # ⚠ 미검사를 통과로 읽지 않는다 — 결과에 그 사실을 박아 둔다.
-    d.setdefault("notes", "")
-    d["notes"] = (d["notes"] + " | ⚠ 쓰기 범위 미검사(파일 수가 상한을 넘어 스냅샷을 뜨지 못했다)").strip(" |")
-    json.dump(d, io.open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-    print("OK-UNCHECKED")
-    sys.exit(0)
-
-def lines(p):
-    s = set()
-    for line in io.open(p, encoding="utf-8", errors="replace"):
-        line = line.rstrip("\n").strip()
-        if line:
-            s.add(line)
-    return s
-
-new = lines(after_p) - lines(before_p)
-# fs 방식은 "경로 크기 mtime" 이므로 경로만 뽑는다.
-if scope_method == "fs":
-    new = set(x.rsplit(" ", 2)[0].lstrip("./") for x in new)
+if schema.get("additionalProperties") is False:
+    extra = [k for k in d if k not in (schema.get("properties") or {})]
+    if extra:
+        sys.stderr.write("스키마에 없는 필드: %s" % ",".join(extra))
+        sys.exit(65)
 
 patterns = [x for x in pats.split("|") if x]
 
@@ -331,29 +394,71 @@ def is_test(path):
             return True
     return False
 
-outside = sorted(p for p in new if not is_test(p) and p not in self_made)
-if outside:
-    sys.stderr.write("테스트 패턴 밖 변경: %s\n" % ",".join(outside[:8]))
+if scope_method == "none":
+    # ⛔ 미검사를 통과로 읽지 않는다(리뷰 g12). 검사하지 못한 것은 **거부**다 —
+    #   「검사했고 깨끗하다」와 「검사 자체가 안 됐다」를 같은 rc 로 말할 수 없다.
+    sys.stderr.write("쓰기 범위를 검사하지 못했다(파일 수가 상한을 넘었다)")
     sys.exit(66)
-print("OK")
+
+def fp(p):
+    m = {}
+    for line in io.open(p, encoding="utf-8", errors="replace"):
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        path, _, digest = line.partition("\t")
+        m[path] = digest
+    return m
+
+b, a = fp(before_p), fp(after_p)
+touched = set(p for p, dg in a.items() if b.get(p) != dg)
+touched |= set(p for p in b if p not in a)          # 삭제도 변경이다
+
+outside = sorted(p for p in touched if not is_test(p) and p not in self_made)
+if outside:
+    sys.stderr.write("테스트 패턴 밖 변경: %s" % ",".join(outside[:8]))
+    sys.exit(66)
+
+# ── 대조군: **관측**을 기준으로 한다(자기신고가 아니라).
+#   ⚠ 종전에는 `mode == "full" and tests_written` 이었다. 그러면 ①write 모드로 부르거나
+#     ②tests_written 을 빈 배열로 보고하면 검사가 통째로 건너뛰어졌다(리뷰 g7).
+test_touched = sorted(p for p in touched if is_test(p) and p not in self_made)
+if mode in ("full", "write") and test_touched:
+    red = [c for c in (d.get("control_group") or []) if c.get("went_red") is True]
+    if not red:
+        sys.stderr.write("테스트 파일 %d개가 바뀌었는데 went_red 인 대조군이 0건: %s"
+                         % (len(test_touched), ",".join(test_touched[:5])))
+        sys.exit(67)
+    claimed = set(t.get("file") for t in (d.get("tests_written") or []))
+    unreported = [p for p in test_touched if p not in claimed]
+    if unreported:
+        d["notes"] = (str(d.get("notes") or "") +
+                      " | ⚠ tests_written 에 없는 테스트 파일 변경: " + ",".join(unreported[:5])).strip(" |")
+        json.dump(d, io.open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 PYVERIFY
 V_RC=$?
+V_MSG="$(head -3 "$VERIFY_ERR" 2>/dev/null | tr '\n' ' ')"
 case "$V_RC" in
   0)  : ;;
-  65) fail_json 65 "schema_violation(필수 필드 누락)" ;;
-  66) fail_json 66 "wrote_outside_test_paths(테스트 파일 밖을 고쳤다 — 스냅샷이 본 실제 변경 기준 · 방식=$SCOPE_METHOD)" ;;
-  67) fail_json 67 "control_group_missing(테스트를 썼는데 발화한 대조군이 0건)" ;;
-  *)  fail_json 65 "validation_failed(rc=$V_RC)" ;;
+  65) fail_json 65 "schema_violation: ${V_MSG}" ;;
+  66) fail_json 66 "wrote_outside_test_paths: ${V_MSG}(스냅샷 방식=$SCOPE_METHOD)" ;;
+  67) fail_json 67 "control_group_missing: ${V_MSG}" ;;
+  *)  fail_json 65 "validation_failed(rc=$V_RC) ${V_MSG}" ;;
 esac
 
-# ── ⑩ 원장 ──────────────────────────────────────────────────────────────────
-LEDGER="$CWD/${TESTER_LEDGER:-.claude/tester/tester.jsonl}"
-mkdir -p "$(dirname "$LEDGER")" 2>/dev/null
-python3 - "$OUT" "$LEDGER" "$LABEL" "$MODE" "$TESTER_MODEL" "$SCOPE_METHOD" <<'PYLEDGER'
-import io, json, sys, datetime
+# ── ⑪ 원장 ──────────────────────────────────────────────────────────────────
+mkdir -p "$(dirname "$LEDGER_PATH")" 2>/dev/null
+python3 - "$OUT" "$LEDGER_PATH" "$LABEL" "$MODE" "$TESTER_MODEL" "$SCOPE_METHOD" <<'PYLEDGER'
+import io, json, os, sys, datetime
 out, ledger, label, mode, model, scope = sys.argv[1:7]
 d = json.load(io.open(out, encoding="utf-8"))
-m = d.get("_meta") or {}
+m = {}
+mp = out + ".meta.json"
+if os.path.exists(mp):
+    try:
+        m = json.load(io.open(mp, encoding="utf-8"))
+    except Exception:
+        m = {}
 row = {
     "at": datetime.datetime.now().isoformat(timespec="seconds"),
     "label": label, "mode": mode, "model": model, "rc": 0, "scope_check": scope,
@@ -369,5 +474,6 @@ with io.open(ledger, "a", encoding="utf-8") as f:
     f.write(json.dumps(row, ensure_ascii=False) + "\n")
 PYLEDGER
 
+# ⭐ stdout 은 **JSON 하나뿐**이다(리뷰 g15). 검증 스크립트의 진단은 stderr 로만 나간다.
 cat "$OUT"
 exit 0

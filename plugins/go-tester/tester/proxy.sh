@@ -59,8 +59,10 @@ case "$CMD" in
       [ -n "$p" ] && kill "$p" 2>/dev/null
       rm -f "$PID_FILE"
     fi
-    # ⭐ pid 파일이 없어도 포트를 잡고 있는 프로세스를 거둔다 — 이전 실행이 비정상 종료했을 수 있다.
-    for p in $(lsof -ti "tcp:$PORT" 2>/dev/null); do kill "$p" 2>/dev/null; done
+    # ⭐ pid 파일이 없어도 포트를 **듣고 있는** 프로세스를 거둔다(이전 실행이 비정상 종료).
+    # ⛔ `-sTCP:LISTEN` 이 없으면 그 포트에 **연결한 클라이언트까지** 잡힌다(리뷰가 지목) —
+    #   즉 아직 작업 중인 형제 호출의 자식 `claude` 프로세스를 죽이게 된다. 리스너만 본다.
+    for p in $(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null); do kill "$p" 2>/dev/null; done
     sleep 1
     if alive; then echo "proxy: ⚠ 아직 살아 있다 (127.0.0.1:$PORT)"; exit 1; fi
     echo "proxy: 내렸다 (127.0.0.1:$PORT)"

@@ -30,7 +30,11 @@
    ⚠ 기본값이 「안 씀」이라 아무 조치가 없어도 다음 계획부터는 다시 묻는다.
 2. **체인(심링크)** — `bash scripts/rollback.sh --apply`:
    심링크를 `SYMLINK_TARGET_BEFORE` 로 복원 · 프록시 stop · 세마포어·임시 워크트리 회수 ·
-   프로젝트 config `enabled: off`. go-skill 에 들어간 코드는 남지만 아무도 부르지 않는다.
+   옵트인 삭제 · 프로젝트 config `enabled: off`. go-skill 에 들어간 코드는 남지만 아무도
+   부르지 않는다.
+   ⚠ **여기까지가 스크립트의 범위다.** 「`--apply` 한 번이면 도입 전 상태로 돌아간다」가
+   아니다 — 3층은 사람이 한다. 스크립트가 그 경계를 출력에 적고, dry-run 이 기본인 이유도
+   그것이다(무엇이 남는지 먼저 보라).
 3. **코드(태그)** — 세 레포를 `TAG` 기준으로 `git revert`(⛔ `reset` 이 아니다 — 이 레포군의
    squash 재사용 금지와 같은 이유로 히스토리를 지우지 않는다) ·
    `~/개발/go-review-archived-2026-09-15` 를 `~/개발/go-review` 로 rename 복원.

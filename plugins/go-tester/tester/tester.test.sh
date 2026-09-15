@@ -58,7 +58,36 @@ print(json.dumps({
 PY
 }
 
-new_repo() { # new_repo <경로> [enabled] — git 레포 + 구성 + 옵트인
+# 계획 지문 — 옵트인은 계획 파일의 **내용 해시**에 묶인다(경로가 아니라).
+#   픽스처도 그 규약을 지켜야 한다. 종전 픽스처는 지문이 없어서, 새 통제가 붙은 순간
+#   11개 검사가 한꺼번에 rc 70 으로 떨어졌다 — 통제가 실제로 문다는 증거였다.
+plan_fp() { # plan_fp <계획 파일>
+  python3 -c 'import hashlib,io,sys
+try:
+    print(hashlib.sha256(io.open(sys.argv[1],"rb").read()).hexdigest()[:16])
+except Exception:
+    print("")' "$1"
+}
+
+write_optin() { # write_optin <레포> [계획 파일] — 지문까지 갖춘 유효한 옵트인
+  local r="$1" pf="${2:-$1/.claude/plan-active.md}"
+  [ -f "$pf" ] || printf '# 계획\n\n- [ ] 항목\n' > "$pf"
+  printf '{"answer":"use","plan_file":"%s","plan_fingerprint":"%s","heartbeat_at":"2026-09-15T00:00:00"}\n' \
+    "$pf" "$(plan_fp "$pf")" > "$r/.claude/tester/opt-in.json"
+}
+
+good_result_empty() { # 테스트를 썼는데 자기신고는 비운 산출
+  python3 - <<'PY'
+import json
+print(json.dumps({
+    "mode": "full", "commands": [], "passed": 1, "failed": 0, "skipped": 0, "failures": [],
+    "tests_written": [], "control_group": [],
+    "files_changed": [], "notes": "", "unavailable_reason": "",
+}, ensure_ascii=False))
+PY
+}
+
+new_repo() { # new_repo <경로> [enabled] — git 레포 + 구성 + 유효한 옵트인
   local r="$1" en="${2:-ask}"
   rm -rf "$r"; mkdir -p "$r/.claude/tester"
   git -C "$r" init -q
@@ -69,8 +98,8 @@ new_repo() { # new_repo <경로> [enabled] — git 레포 + 구성 + 옵트인
   git -C "$r" add -A >/dev/null 2>&1
   git -C "$r" commit -q -m init
   printf '{"enabled":"%s","endpoint":"http://127.0.0.1:1/v1","model":"m"}\n' "$en" > "$r/.claude/tester/config.json"
-  printf '{"answer":"use","plan_file":"%s/.claude/plan-active.md"}\n' "$r" > "$r/.claude/tester/opt-in.json"
   printf 'do something\n' > "$r/task.txt"
+  write_optin "$r"
 }
 
 # probe 를 통과시키는 mock: proxy.sh·probe.sh 를 가짜로 덮는다.
@@ -117,9 +146,29 @@ rc=$(run_with_mocks "$R")
 [ "$rc" = "70" ] && ok "A2 enabled=off → rc 70" || no "A2 enabled=off → rc 70" "실제 rc=$rc"
 
 R="$T/r-a3"; new_repo "$R" ask
-printf '{"answer":"use","plan_file":"/elsewhere/plan-active.md"}\n' > "$R/.claude/tester/opt-in.json"
+printf '{"answer":"use","plan_file":"/elsewhere/plan-active.md","plan_fingerprint":"deadbeefdeadbeef"}\n' > "$R/.claude/tester/opt-in.json"
 rc=$(run_with_mocks "$R")
 [ "$rc" = "70" ] && ok "A3 다른 계획의 옵트인 → rc 70" || no "A3 다른 계획의 옵트인 → rc 70" "실제 rc=$rc"
+
+# 새 축 — 지문이 **없거나 낡으면** 거부한다(리뷰 g1). 경로만으로는 앞 계획의 잔재와
+# 구분되지 않아서, 옵트인이 조용히 다음 계획으로 이어지던 자리다.
+R="$T/r-a5"; new_repo "$R" ask
+printf '{"answer":"use","plan_file":"%s/.claude/plan-active.md"}\n' "$R" > "$R/.claude/tester/opt-in.json"
+rc=$(run_with_mocks "$R")
+[ "$rc" = "70" ] && ok "A5 지문 없는 옵트인 → rc 70" || no "A5 지문 없는 옵트인 → rc 70" "실제 rc=$rc"
+r5=$(reason_of)
+case "$r5" in *optin_without_fingerprint*) ok "A5b 사유가 지문 부재를 지목한다" ;; *) no "A5b 사유가 지문 부재를 지목한다" "사유=$r5" ;; esac
+
+R="$T/r-a6"; new_repo "$R" ask
+printf '# 계획\n\n- [x] 항목을 닫았다\n' > "$R/.claude/plan-active.md"
+rc=$(run_with_mocks "$R")
+[ "$rc" = "70" ] && ok "A6 계획이 바뀌면 옵트인이 무효다 → rc 70" || no "A6 계획이 바뀌면 무효" "실제 rc=$rc"
+r6=$(reason_of)
+case "$r6" in *optin_stale*) ok "A6b 사유가 계획 변경을 지목한다" ;; *) no "A6b 사유가 계획 변경을 지목한다" "사유=$r6" ;; esac
+
+R="$T/r-a7"; new_repo "$R" ask
+rc=$(run_with_mocks "$R")
+[ "$rc" != "70" ] && ok "A7 대조군 — 지문이 맞으면 통과한다(A5·A6 이 지문을 실제로 본다는 증거)" || no "A7 지문이 맞아도 rc 70" "실제 rc=$rc"
 
 R="$T/r-a4"; new_repo "$R" ask
 stub_probe false
@@ -140,9 +189,21 @@ R="$T/r-b2"; new_repo "$R"; make_mock '{"mode":"full","passed":1}'
 rc=$(run_with_mocks "$R")
 [ "$rc" = "65" ] && ok "B2 필수 필드 누락 → rc 65" || no "B2 필수 필드 누락 → rc 65" "실제 rc=$rc"
 
-R="$T/r-b3"; new_repo "$R"; make_mock "$(good_result notred)"
+R="$T/r-b3"; new_repo "$R"
+make_mock "$(good_result notred)" 'echo "package p" > "$PWD/x_test.go"'
 rc=$(run_with_mocks "$R" --mode full)
 [ "$rc" = "67" ] && ok "B3 대조군 미발화 → rc 67" || no "B3 대조군 미발화 → rc 67" "실제 rc=$rc"
+
+# 대조군 판정이 **관측 기준**인지 잰다(리뷰 g7) — 자기신고를 비워도 파일이 바뀌면 걸려야 한다.
+R="$T/r-b3b"; new_repo "$R"
+make_mock "$(good_result_empty)" 'echo "package p" > "$PWD/y_test.go"'
+rc=$(run_with_mocks "$R" --mode full)
+[ "$rc" = "67" ] && ok "B3b tests_written 을 비워 보고해도 잡힌다(관측 기준)" || no "B3b 자기신고 우회가 뚫린다" "실제 rc=$rc"
+
+R="$T/r-b3c"; new_repo "$R"
+make_mock "$(good_result notred)" 'echo "package p" > "$PWD/z_test.go"'
+rc=$(run_with_mocks "$R" --mode write)
+[ "$rc" = "67" ] && ok "B3c write 모드도 대조군을 요구한다" || no "B3c write 모드 우회가 뚫린다" "실제 rc=$rc"
 
 R="$T/r-b1u"; new_repo "$R"
 make_mock 'Failed to authenticate. API Error: 403 litellm.APIError: OpenAIException - {"error":"요청이 보안 정책(jailbreak/prompt-injection)에 의해 차단되었습니다.","by":"fabrix-guard"}'
@@ -168,6 +229,7 @@ echo "── C. 부모 계획 파일 보호 ────────────
 
 R="$T/r-c1"; new_repo "$R"
 printf '# 계획\n\n- [ ] 미완료 항목\n' > "$R/.claude/plan-active.md"
+write_optin "$R"        # 계획을 바꿨으니 지문도 다시 (규약대로)
 before=$(shasum -a 256 "$R/.claude/plan-active.md" | cut -d' ' -f1)
 make_mock "$(good_result red)" 'printf "# 비었다\n" > "$PWD/.claude/plan-active.md"'
 rc=$(run_with_mocks "$R" --mode full)
@@ -177,6 +239,7 @@ after=$(shasum -a 256 "$R/.claude/plan-active.md" | cut -d' ' -f1)
 
 R="$T/r-c2"; new_repo "$R"
 printf '# 계획\n\n- [ ] 미완료 항목\n' > "$R/.claude/plan-active.md"
+write_optin "$R"
 make_mock "$(good_result red)"
 rc=$(run_with_mocks "$R" --mode full)
 [ "$rc" = "0" ] && ok "C2 계획 파일을 안 고치면 통과 (C1 의 대조군)" || no "C2 계획 파일을 안 고치면 통과" "실제 rc=$rc"
@@ -186,8 +249,8 @@ echo "── D. 쓰기 범위 검사가 **살아 있는가** ──────�
 
 R="$T/r-d1"; mkdir -p "$T/r-d1/.claude/tester"
 printf '{"enabled":"ask","endpoint":"http://127.0.0.1:1/v1","model":"m"}\n' > "$R/.claude/tester/config.json"
-printf '{"answer":"use","plan_file":"%s/.claude/plan-active.md"}\n' "$R" > "$R/.claude/tester/opt-in.json"
 printf 'task\n' > "$R/task.txt"; echo "package p" > "$R/x.go"
+write_optin "$R"
 make_mock "$(good_result red)" 'echo "// 고쳤다" >> "$PWD/x.go"'
 rc=$(run_with_mocks "$R" --mode full)
 [ "$rc" = "66" ] && ok "D1 git 아닌 디렉토리에서도 소스 수정을 잡는다" || no "D1 git 아닌 디렉토리에서도 소스 수정을 잡는다" "실제 rc=$rc (fail-open 이면 0 이 나온다)"

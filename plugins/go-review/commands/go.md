@@ -117,12 +117,15 @@ bash "$TT/tester/probe.sh" --for-plan          # 지금의 heartbeat
 - 그 밖에는 `AskUserQuestion` 으로 묻는다. 지금의 heartbeat 결과와 계획 때의 답을 함께 보여라:
   「지금 heartbeat OK 587ms · 계획 때 답: 쓴다 — 이 계획에서 켭니까?」
 
-**답이 「쓴다」이면** 옵트인을 기록하고 목표 계약에 한 줄을 넣는다:
+**답이 「쓴다」이면** 옵트인을 기록하고 목표 계약에 한 줄을 넣는다.
+⚠ `plan_fingerprint` 를 **반드시** 넣어라 — 경로만 적으면 앞 계획의 기록과 구분되지 않는다
+(그 경로는 모든 계획이 공유하는 상수다). 지문이 없는 기록은 `_config.py` 가 거부한다.
 
 ```bash
 mkdir -p "$CLAUDE_PROJECT_DIR/.claude/tester"
+FP=$(python3 ~/.claude/skills/go-tester/tester/_config.py | grep '^TESTER_PLAN_FINGERPRINT=' | cut -d= -f2- | tr -d "'")
 cat > "$CLAUDE_PROJECT_DIR/.claude/tester/opt-in.json" <<JSON
-{"answer":"use","plan_file":"$CLAUDE_PROJECT_DIR/.claude/plan-active.md","heartbeat_at":"$(date -Iseconds)"}
+{"answer":"use","plan_file":"$CLAUDE_PROJECT_DIR/.claude/plan-active.md","plan_fingerprint":"$FP","heartbeat_at":"$(date -Iseconds)"}
 JSON
 ```
 
@@ -130,7 +133,18 @@ JSON
 테스트 에이전트: 사용(heartbeat 2026-09-15T07:30:00+09:00)
 ```
 
-**답이 「안 쓴다」이면** 파일을 쓰지 않고 같은 자리에 `테스트 에이전트: 미사용(<사유>)` 을 적는다.
+⚠⚠ **계획 파일을 고치면 지문이 바뀌어 옵트인이 무효가 된다**(`optin_stale`). 그것이 의도다 —
+승인받은 계획이 달라졌으면 그 답도 다시 받아야 한다. 진행 중 체크박스를 닫는 것만으로도
+무효가 되므로, **위임을 계속 쓰려면 그때 다시 물어 새로 기록하라.** 묻지 않으면 rc 70 으로
+닫히고 세션이 직접 테스트를 쓴다(안전한 쪽).
+
+**답이 「안 쓴다」이면** 같은 자리에 `테스트 에이전트: 미사용(<사유>)` 을 적고,
+⛔ **기존 옵트인 파일이 있으면 지워라.** 파일을 안 쓰는 것만으로는 부족하다 — 앞 계획의
+기록이 남아 있으면 「안 쓴다」고 답했는데도 켜진 채로 간다(리뷰가 지목한 자리다).
+
+```bash
+rm -f "$CLAUDE_PROJECT_DIR/.claude/tester/opt-in.json"
+```
 
 ⭐ 옵트인은 **이 계획 파일에 묶인다.** 다음 계획에서는 다시 묻는다 — 조용히 이어지면
 「기본은 안 씀」이 거짓이 된다. 그래서 자원 회수(§3-c)에서 이 파일을 지운다.

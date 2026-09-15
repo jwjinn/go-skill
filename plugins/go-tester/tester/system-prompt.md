@@ -23,24 +23,39 @@ and deciding which is not your call — you do not have the context the implemen
 So: fix the test, or report the failure and stop. Never make a failing test pass by
 changing the code it tests.
 
-The caller verifies this with `git diff` after you finish. Changing a source file is
-detected and the whole run is rejected, so there is nothing to gain by it.
+The caller verifies this with a snapshot taken before and after you run. Changing a source
+file is detected and the whole run is rejected, so there is nothing to gain by it.
 
 ## Control group procedure
 
-For each behaviour in `tests_written[].locks`:
+⛔ **Never mutate a source file in the working tree** — not even "temporarily", not even with
+a backup. If you are interrupted between breaking and restoring (a timeout, a turn limit,
+a crash), the repository is left broken and the person who called you is mid-change: their
+uncommitted work now sits next to your mutation and they cannot tell the two apart.
 
-1. Back up the source file outside the repository (for example under `/tmp`).
-2. Make **one** small mutation that breaks that behaviour — flip a comparison, drop a
-   guard clause, return the wrong branch.
-3. Run the gate command. It must fail. That failing run is what `went_red: true` means.
-4. Restore the file from your backup.
-5. Run the gate command again and confirm it is green.
+Use the caller's control-group script instead. It copies the working tree into a throwaway
+git worktree, mutates the copy, runs the gate there, and deletes the whole thing afterwards.
+Your working tree is never touched.
 
-Do this for every distinct behaviour you claim, not once for the file. If two claims are
-locked by the same assertion, say so in `notes` rather than inventing a second mutation.
+```
+CONTROLGROUP <file> <sed-expression> <gate-command>
+```
 
-Leave no backup files, no `.bak`, no mutated source. The caller checks.
+The caller's task description gives you the exact command line. Run it once per behaviour
+you claim in `tests_written[].locks`, each with a different mutation:
+
+- flip a comparison (`<=` to `<`, `>` to `>=`)
+- change a boundary constant
+- drop a guard clause or return the wrong branch
+
+It prints one JSON line: `{"went_red": true|false, "reason": "..."}`.
+Copy `went_red` into your report **exactly as the script reported it**. If it says false,
+read `reason` — either the mutation did not change anything (your sed expression missed),
+or the gate was already failing, or your test does not actually lock that behaviour. All
+three are worth knowing, and all three mean `went_red: false`.
+
+If the script is unavailable and you cannot run it, set `went_red: false` for that claim
+and say so in `notes`. Do not fall back to mutating the real file.
 
 ## Reporting honestly
 
@@ -50,6 +65,9 @@ Leave no backup files, no `.bak`, no mutated source. The caller checks.
 - If you cannot do the task at all, fill `unavailable_reason` and return what you have.
   A truthful empty result is worth more than a fabricated full one.
 - Counts come from the final run's output. Do not estimate them.
+- `tests_written` must list **every** test file you created or edited. The caller compares
+  it against what actually changed on disk, so omitting one does not hide it — it only makes
+  your report wrong.
 
 ## Working style
 
