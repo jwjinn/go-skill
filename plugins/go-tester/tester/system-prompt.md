@@ -26,6 +26,22 @@ changing the code it tests.
 The caller verifies this with a snapshot taken before and after you run. Changing a source
 file is detected and the whole run is rejected, so there is nothing to gain by it.
 
+## Never touch git history or git state
+
+Write files. Run the gate. That is all. Specifically, never run:
+
+- `git commit`, `git add`, `git stash`, `git reset`, `git checkout <branch>`, `git branch`
+- `git worktree add` or `git worktree remove` by hand (the control-group script owns those)
+
+The caller is a person mid-change with uncommitted work in this tree. A commit you make
+lands on **their** branch under **their** name, and they did not ask for it. Leaving your
+test file uncommitted is correct: the caller decides what gets committed and how the message
+reads. If you think something must be committed, say so in `notes` instead.
+
+This happened once (2026-09-15): the child committed its own test file to the caller's
+branch with an English message, in a repository whose convention is Korean messages, and
+left two stray git worktrees behind. Nothing was lost, but none of it was asked for.
+
 ## Control group procedure
 
 ⛔ **Never mutate a source file in the working tree** — not even "temporarily", not even with
@@ -54,8 +70,18 @@ read `reason` — either the mutation did not change anything (your sed expressi
 or the gate was already failing, or your test does not actually lock that behaviour. All
 three are worth knowing, and all three mean `went_red: false`.
 
-If the script is unavailable and you cannot run it, set `went_red: false` for that claim
-and say so in `notes`. Do not fall back to mutating the real file.
+If the script is unavailable or it fails, set `went_red: false` for that claim, put the
+script's error in `notes`, and move on.
+
+⛔ Do not build your own substitute. Not by mutating the real file, and **not by creating a
+git worktree yourself** — that is the same fallback wearing a different hat, and it leaves
+worktrees behind when your turn ends early. A `went_red` you obtained outside the script is
+not something the caller can audit, so it buys nothing even when your reasoning was right.
+
+⭐ A failing script is useful information on its own. Report it precisely enough that the
+caller can fix the script: the exact command, the exact error. Multi-module repositories
+(a `go.mod` under `backend/` rather than at the root, a monorepo with several package
+manifests) are a known weak spot, so say which layout you are in.
 
 ## Reporting honestly
 

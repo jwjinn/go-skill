@@ -31,6 +31,27 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# ⛔⛔ 게이트는 **셸에 통째로** 넘겨라 (2026-09-15 실측 — 이 레포에서 대조군이 한 번도
+#   성립하지 않았다). 종전 코드는 `eval "timeout $TMO $GATE"` 였고, 게이트가
+#   `cd backend && go test ...` 같은 복합 명령이면 `timeout` 이 **첫 낱말 `cd` 에만** 붙는다.
+#   그리고 macOS 에는 `/usr/bin/cd` 가 실제로 존재한다 — 그래서 그 호출은 **조용히 rc 0** 을
+#   내고(자식 프로세스의 디렉토리만 바뀌고 사라진다) `&&` 를 통과한 뒤, 뒤 명령이
+#   **워크트리 루트**에서 돈다. go.mod 가 `backend/` 에 있는 레포에서는 거기서 실패한다.
+#   ⇒ 출력은 「go.mod 가 없다」이고, 읽는 사람은 **레포 구조 문제**로 읽는다. 실제로는
+#     측정 도구의 버그다. 틀린 사유는 없는 것보다 나쁘다.
+#   ⚠ `timeout` 이 없는 환경도 있다(BSD 계열 기본). 없으면 시간 제한 없이 그냥 돌린다 —
+#     상한을 잃는 것이 측정 자체를 잃는 것보다 낫다.
+CG_TIMEOUT=""
+for c in timeout gtimeout; do command -v "$c" >/dev/null 2>&1 && { CG_TIMEOUT="$c"; break; }; done
+
+run_gate() { # run_gate <작업 디렉토리> → 게이트의 종료 코드
+  if [ -n "$CG_TIMEOUT" ]; then
+    ( cd "$1" && "$CG_TIMEOUT" "$TMO" bash -c "$GATE" ) >/dev/null 2>&1
+  else
+    ( cd "$1" && bash -c "$GATE" ) >/dev/null 2>&1
+  fi
+}
+
 emit() { # emit <went_red> <rc_mut> <rc_clean> <reason>
   python3 -c 'import json,sys;print(json.dumps({"went_red":sys.argv[1]=="true","gate_rc_mutated":int(sys.argv[2]),"gate_rc_clean":int(sys.argv[3]),"reason":sys.argv[4]},ensure_ascii=False))' \
     "$1" "$2" "$3" "$4"
@@ -42,8 +63,45 @@ emit() { # emit <went_red> <rc_mut> <rc_clean> <reason>
 git -C "$REPO" rev-parse --show-toplevel >/dev/null 2>&1 || {
   emit false 0 0 "git 레포가 아니다: $REPO"; exit 65; }
 
+# ⛔⛔ 게이트가 **원본 레포의 절대경로**를 품고 있으면 대조군이 성립하지 않는다 (2026-09-15 실측).
+#   이 스크립트는 `( cd "$WT" && eval "$GATE" )` 로 게이트를 워크트리 안에서 돌린다. 그런데
+#   게이트가 `cd /절대/경로/backend && go test ...` 형태면 그 `cd` 가 **워크트리 밖 원본으로
+#   되돌아간다** — 변이는 사본에만 있으므로 게이트는 멀쩡한 원본을 보고 초록을 낸다.
+#   ⇒ `went_red:false` 가 나오고, 읽는 사람은 「테스트가 그 동작을 안 잠근다」로 읽는다.
+#     실제로는 테스트가 아니라 **측정이 틀린 것**이다. 조용하고, 결론이 정확히 반대다.
+#   그래서 그 조건을 거부한다. 게이트는 **레포 루트 기준 상대경로**로 줘라
+#     ✔ `cd backend && go test ./internal/... -count=1`
+#     ✘ `cd /Users/me/repo/backend && go test ./internal/... -count=1`
+#   ⚠ 경로를 **한 가지 형태로만** 비교하지 마라. macOS 의 `/tmp` 는 `/private/tmp` 로 가는
+#     심링크라 논리 경로와 물리 경로가 다르다. 처음 판은 `pwd -P`(물리)만 봐서, 호출자가
+#     논리 경로로 준 게이트를 놓쳤다 — 그 조건에서 검사가 **조용히 통과**한다.
+#     대조군 G5 가 그것을 잡았다(변이해도 went_red:false 가 나오는 것을 실제로 재현했다).
+REPO_PHYS="$(cd "$REPO" 2>/dev/null && pwd -P)"
+REPO_LOGICAL="$(cd "$REPO" 2>/dev/null && pwd)"
+for cand in "$REPO" "$REPO_PHYS" "$REPO_LOGICAL"; do
+  [ -n "$cand" ] || continue
+  case " $GATE " in
+    *"$cand"*)
+      emit false 0 0 "게이트가 원본 레포의 절대경로를 가리킨다($cand) — 그러면 변이본이 아니라 원본에서 돌아 대조군이 거짓 음성이 된다. 레포 루트 기준 상대경로로 줘라(예: 'cd backend && go test ./... -count=1')"
+      exit 68 ;;
+  esac
+done
+
 WTBASE="${WTBASE:-${TMPDIR:-/tmp}/go-tester/cg}"
 mkdir -p "$WTBASE"
+
+# ⭐ 시작할 때 **고아를 먼저 치운다** — trap 은 SIGKILL 을 못 잡는다(2026-09-15 에 둘이 남았다).
+#   자식의 도구 호출이 타임아웃으로 강제 종료되면 cleanup 이 돌지 못하고 워크트리가 남는다.
+#   쌓이면 `worktree list` 가 지저분해지고 사람이 손으로 치우게 된다.
+git -C "$REPO" worktree prune >/dev/null 2>&1
+if [ -d "$WTBASE" ]; then
+  find "$WTBASE" -maxdepth 1 -type d -name 'wt-*' -mmin +60 2>/dev/null | while IFS= read -r stale; do
+    git -C "$REPO" worktree remove --force "$stale" >/dev/null 2>&1
+    rm -rf "$stale" 2>/dev/null
+  done
+  git -C "$REPO" worktree prune >/dev/null 2>&1
+fi
+
 WT="$WTBASE/wt-$$-$(date +%s)"
 
 cleanup() {
@@ -75,7 +133,7 @@ fi
 [ -f "$WT/$FILE" ] || { emit false 0 0 "변이 대상 파일이 워크트리에 없다: $FILE"; exit 67; }
 
 # ── ① 깨끗한 상태에서 게이트가 통과하는가 ────────────────────────────────────
-( cd "$WT" && eval "timeout $TMO $GATE" ) >/dev/null 2>&1
+run_gate "$WT"
 RC_CLEAN=$?
 
 # ── ② 변이를 넣고 게이트가 실패하는가 ────────────────────────────────────────
@@ -88,7 +146,7 @@ if cmp -s "$WT/$FILE" "$REPO/$FILE" 2>/dev/null; then
   emit false "$RC_CLEAN" "$RC_CLEAN" "sed 표현식이 파일을 바꾸지 못했다(변이 0) — 표현식을 확인하라"
   exit 69
 fi
-( cd "$WT" && eval "timeout $TMO $GATE" ) >/dev/null 2>&1
+run_gate "$WT"
 RC_MUT=$?
 
 if [ "$RC_CLEAN" -ne 0 ]; then

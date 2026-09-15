@@ -237,6 +237,19 @@ after=$(shasum -a 256 "$R/.claude/plan-active.md" | cut -d' ' -f1)
 [ "$rc" = "68" ] && ok "C1 자식이 계획 파일을 고치면 → rc 68" || no "C1 자식이 계획 파일을 고치면 → rc 68" "실제 rc=$rc"
 [ "$before" = "$after" ] && ok "C1b 계획 파일이 원본으로 복원된다" || no "C1b 계획 파일이 원본으로 복원된다"
 
+# ⭐ 복원은 **덮어쓰기**다 — 되돌리기 전 내용을 남기지 않으면 가드가 지키려던 것을 가드가 삼킨다.
+#   2026-09-15 실사용에서 이 경로가 발화했는데 원인이 자식이 아니라 **부모**였다(부모 세션이
+#   자식이 도는 동안 계획을 파킹했다). 그때 `.at-exit` 가 없으면 부모의 변경이 사본 없이 사라진다.
+guard_dir=$(reason_of "$T/out.json" | sed -n 's/.*보존: \([^ ·]*\).*/\1/p')
+if [ -n "$guard_dir" ] && [ -f "$guard_dir/plan.at-exit" ] && grep -q '비었다' "$guard_dir/plan.at-exit" 2>/dev/null; then
+  ok "C1c ⭐ 복원 전 내용을 .at-exit 로 보존한다(부모 변경을 삼키지 않는다)"
+else
+  no "C1c ⭐ 복원 전 내용을 .at-exit 로 보존한다" "guard_dir=$guard_dir"
+fi
+[ -n "$guard_dir" ] && grep -q '가르지 못한다' "$T/out.json" 2>/dev/null \
+  && ok "C1d ⭐ 사유가 자식 탓으로 단정하지 않는다(부모일 수도 있다고 말한다)" \
+  || no "C1d ⭐ 사유가 자식 탓으로 단정하지 않는다"
+
 R="$T/r-c2"; new_repo "$R"
 printf '# 계획\n\n- [ ] 미완료 항목\n' > "$R/.claude/plan-active.md"
 write_optin "$R"
@@ -333,6 +346,53 @@ red=$(printf '%s' "$out" | python3 -c 'import json,sys;print(json.load(sys.stdin
 
 wt=$(git -C "$R" worktree list | wc -l | tr -d ' ')
 [ "$wt" = "1" ] && ok "G3 대조군 뒤 임시 워크트리 잔존 0" || no "G3 대조군 뒤 임시 워크트리 잔존 0" "워크트리 $wt 개"
+
+# ⭐⭐ G4 — **다중 모듈 + 복합 게이트**. G1~G3 이 못 보던 자리다(2026-09-15 실측으로 드러났다).
+#   G1 의 픽스처는 루트에 go.mod 가 있고 게이트가 낱말 하나짜리라, 종전 코드의
+#   `eval "timeout $TMO $GATE"` 버그가 드러나지 않았다. 게이트가 `cd sub && ...` 이면
+#   `timeout` 이 **첫 낱말 `cd` 에만** 붙고, macOS 에는 `/usr/bin/cd` 가 실제로 있어서
+#   그 호출이 조용히 rc 0 을 낸 뒤 뒤 명령이 **워크트리 루트**에서 돈다 ⇒ 늘 거짓 음성.
+#   이 레포군의 게이트는 전부 `cd backend && ...`·`cd web && ...` 라 그 조건이 상시였다.
+R="$T/r-g4"; rm -rf "$R"; mkdir -p "$R/sub"
+git -C "$R" init -q; git -C "$R" config user.email t@example.com; git -C "$R" config user.name t
+printf 'module p\n\ngo 1.22\n' > "$R/sub/go.mod"
+cat > "$R/sub/calc.go" <<'EOF'
+package p
+
+func Add(a, b int) int { return a + b }
+EOF
+cat > "$R/sub/calc_test.go" <<'EOF'
+package p
+
+import "testing"
+
+func TestAdd(t *testing.T) {
+	if Add(2, 3) != 5 {
+		t.Fatal("Add(2,3) != 5")
+	}
+}
+EOF
+git -C "$R" add -A >/dev/null 2>&1; git -C "$R" commit -q -m sub
+out=$(bash "$SELF/controlgroup.sh" --repo "$R" --file sub/calc.go --sed 's/a + b/a - b/' --gate 'cd sub && go test ./... -count=1' 2>/dev/null)
+red=$(printf '%s' "$out" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("went_red"))' 2>/dev/null)
+clean=$(printf '%s' "$out" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("gate_rc_clean"))' 2>/dev/null)
+[ "$red" = "True" ] && ok "G4 ⭐⭐ 복합 게이트(cd sub && ...) + 하위 모듈에서도 발화한다" \
+  || no "G4 ⭐⭐ 복합 게이트 + 하위 모듈에서도 발화한다" "산출=$out"
+[ "$clean" = "0" ] && ok "G4b 깨끗한 상태의 게이트가 실제로 통과한다(0 이 아니면 대조군이 성립조차 못 한다)" \
+  || no "G4b 깨끗한 상태의 게이트가 실제로 통과한다" "gate_rc_clean=$clean"
+
+# ⭐ G5 — 게이트가 **원본 레포의 절대경로**를 품으면 거부한다.
+#   그런 게이트는 워크트리 안에서 실행해도 `cd /절대/경로` 로 밖으로 되돌아가 원본을 잰다.
+#   변이는 사본에만 있으므로 늘 초록이 나오고, 읽는 사람은 「테스트가 안 잠근다」로 읽는다.
+out=$(bash "$SELF/controlgroup.sh" --repo "$R" --file sub/calc.go --sed 's/a + b/a - b/' --gate "cd $R/sub && go test ./... -count=1" 2>/dev/null)
+rc=$?
+red=$(printf '%s' "$out" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("went_red"))' 2>/dev/null)
+printf '%s' "$out" | grep -q '절대경로' && [ "$red" = "False" ] \
+  && ok "G5 ⭐ 절대경로 게이트를 거부한다(거짓 음성을 원천에서 막는다)" \
+  || no "G5 ⭐ 절대경로 게이트를 거부한다" "산출=$out"
+
+wt=$(git -C "$R" worktree list | wc -l | tr -d ' ')
+[ "$wt" = "1" ] && ok "G6 G4·G5 뒤에도 워크트리 잔존 0" || no "G6 G4·G5 뒤에도 워크트리 잔존 0" "워크트리 $wt 개"
 
 echo
 echo "── H. 실모델(--live 일 때만) ───────────────────────────────────────"

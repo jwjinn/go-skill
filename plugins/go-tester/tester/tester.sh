@@ -162,12 +162,22 @@ changed() { # changed <파일> <이름> → 0=바뀌었다
   [ -f "$1" ] || return 0
   [ "$(shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1)" != "$(cat "$GUARD_DIR/$2.sha")" ]
 }
+# ⭐⭐ 복원은 **덮어쓰기**다 — 되돌리기 전에 지금 내용을 반드시 남겨라 (2026-09-15 실측).
+#   첫 실사용에서 이 경로가 발화했는데 원인이 자식이 아니라 **부모**였다: 부모 세션이
+#   자식이 도는 동안 계획 파일을 파킹(`mv`)했고, 가드가 그것을 훼손으로 읽어 되돌렸다.
+#   그때 부모의 변경이 아무 사본도 없이 사라진다 — 가드가 지키려던 것을 가드가 삼킨다.
+#   ⇒ 되돌리기 전에 `<이름>.at-exit` 로 보존하고, 그 경로를 사유에 실어 되찾을 수 있게 한다.
+restore_one() { # restore_one <파일> <이름> → 바뀌었으면 보존·복원하고 0
+  changed "$1" "$2" || return 1
+  [ -f "$1" ] && cp "$1" "$GUARD_DIR/$2.at-exit" 2>/dev/null
+  cp "$GUARD_DIR/$2.bak" "$1"
+}
 restore_parents() {
   # ⭐ 신호로 죽을 때도 **복원이 먼저**다(리뷰 g10). 종전 트랩은 백업이 든 GUARD_DIR 을
   #   지우고 끝나서, INT·TERM 경로에서는 자식이 고친 계획 파일이 그대로 남았다.
   local restored=""
-  if changed "$PLAN_F" plan;     then cp "$GUARD_DIR/plan.bak"   "$PLAN_F";   restored="$restored plan-active.md"; fi
-  if changed "$REVIEW_F" review; then cp "$GUARD_DIR/review.bak" "$REVIEW_F"; restored="$restored review-active.md"; fi
+  if restore_one "$PLAN_F"   plan;   then restored="$restored plan-active.md"; fi
+  if restore_one "$REVIEW_F" review; then restored="$restored review-active.md"; fi
   printf '%s' "$restored"
 }
 snap "$PLAN_F" plan
@@ -243,6 +253,18 @@ fi
 
 # ── ⑦ 자식 실행 ─────────────────────────────────────────────────────────────
 SCHEMA="$(cat "$SELF/result-schema.json")"   # ⚠ --json-schema 는 **경로가 아니라 JSON 문자열**이다(실측)
+
+# ⭐⭐ 결과를 **파일로** 받는다 (2026-09-15 · 실측으로 바꿨다).
+#   종전에는 자식의 **마지막 메시지**가 곧 산출이었고 `--json-schema` 로 그것을 강제했다.
+#   그런데 도구를 쓴 다중 턴 세션에서 작은 모델은 그 전환을 못 한다 — 실측:
+#   「go vet은 문제가 없었습니다. now return the structured output:」 에서 멈췄다.
+#   일은 다 해 놓고 형식만 못 갖춰 rc 65 로 통째로 버려지는 것이 그 부류다.
+#   ⚠ 도구 없는 단일 호출에서는 같은 모델이 스키마를 정확히 지켰다 — 즉 능력이 아니라
+#     **전환**의 문제다.
+#   ⇒ 파일 쓰기는 도구 호출이라 이미 되는 것이 증명돼 있다(자식이 Bash 로 게이트를 돌렸다).
+#     그 경로를 산출의 **정본**으로 삼고, 마지막 메시지는 폴백으로 남긴다.
+#   ⚠ 이 파일은 `$GUARD_DIR` 안이라 레포 밖이다 — 쓰기 범위 검사에 걸리지 않는다.
+REPORT_FILE="$GUARD_DIR/report.json"
 PROMPT="$(cat "$TASK")"
 if [ -n "$GATE" ]; then
   PROMPT="$PROMPT
@@ -261,16 +283,29 @@ CONTROL GROUP COMMAND (this is the CONTROLGROUP <...> your instructions refer to
 It mutates a throwaway copy of the tree, never this working tree, and prints one JSON line
 with went_red. Use it instead of editing any source file yourself.
 
-OUTPUT CONTRACT (the caller parses this and rejects anything else)
-Your final message must be ONE JSON object and nothing else - no prose before or after,
-no markdown fence. Required keys:
+OUTPUT CONTRACT - WRITE IT TO A FILE (this is how the caller reads your result)
+Before you finish, write your report as ONE JSON object to exactly this path:
+  $REPORT_FILE
+Use the Write tool. The file must contain the JSON object and nothing else.
+Required keys:
   mode, commands, passed, failed, skipped, failures, tests_written,
   control_group, files_changed, notes, unavailable_reason
 Set mode to \"$MODE\". Every entry in control_group needs test, mutation and went_red,
-and went_red is true only for a failing run you actually observed."
+and went_red is true only for a failing run you actually observed.
+
+Writing that file is the last thing you do. If you skip it the whole run is discarded,
+however good your work was. After writing it, reply with the same JSON as your final
+message too - but the file is what counts."
 
 CHILD_ERR="$GUARD_DIR/child.err"
 CHILD_OUT="$GUARD_DIR/child.json"
+
+# ⭐ 감시 창을 **자식이 도는 구간**으로 좁힌다 (2026-09-15).
+#   ④ 의 첫 스냅은 프록시 기동·세마포어 대기보다 앞이라, 그 사이(실측 최대 900초 대기)에
+#   부모가 자기 계획 파일을 고치면 자식과 무관한 변경이 ⑧ 에 걸린다. 여기서 다시 찍으면
+#   남는 창은 자식의 수명뿐이다. ⚠ 첫 스냅을 없애지 마라 — 트랩(INT·TERM)이 그것에 기댄다.
+snap "$PLAN_F" plan
+snap "$REVIEW_F" review
 
 t0=$(python3 -c 'import time;print(time.time())')
 (
@@ -305,22 +340,60 @@ ELAPSED=$(python3 -c "print(round($t1-$t0,1))")
 # ── ⑧ 부모 파일 훼손 검사 (다른 판정보다 앞선다) ────────────────────────────
 RESTORED="$(restore_parents)"
 if [ -n "$RESTORED" ]; then
-  fail_json 68 "parent_files_modified:$RESTORED (원본을 복원했다 — 자식이 완주 게이트를 빠져나가려 한 것으로 보인다)"
+  # ⛔ **어느 쪽이 고쳤는지 이 도구는 가르지 못한다.** 2026-09-15 첫 실사용에서 이 경로가
+  #   발화했고 원인은 자식이 아니라 부모였다(부모가 계획을 파킹했다). 종전 문구는
+  #   「자식이 게이트를 빠져나가려 한 것으로 보인다」고 단정했는데, 틀린 사유는 없는 것보다
+  #   나쁘다 — 사람을 반대 방향으로 보낸다. ⇒ 관측된 것만 말하고 판단 재료를 함께 준다.
+  #   ⚠ 자식은 `CLAUDE_PLAN_FILE` 이 임시 경로로 덮여 있고 `--setting-sources ""` 로 훅도
+  #     막혀 있다(⑦). 즉 자식이 부모 계획을 고칠 동기가 구조적으로 없다 — 부모를 먼저 의심하라.
+  WHY68="parent_files_modified:$RESTORED (되돌리기 전 내용을 <이름>.at-exit 로 남겼다"
+  WHY68="$WHY68 · 부모가 고친 것이면 그 파일로 되찾아라 · 자식·부모 어느 쪽인지는 가르지 못한다)"
+  if [ -s "$REPORT_FILE" ]; then
+    SUM68="$(python3 - "$REPORT_FILE" <<'PYSUM' 2>/dev/null
+import io, json, sys
+try:
+    d = json.load(io.open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    raise SystemExit
+cg = d.get("control_group") or []
+red = sum(1 for c in cg if isinstance(c, dict) and c.get("went_red") is True)
+print("자식 보고서는 남아 있다: 통과 %s · 실패 %s · 테스트 %s건 · 대조군 발화 %s/%s · %s"
+      % (d.get("passed"), d.get("failed"), len(d.get("tests_written") or []), red, len(cg), sys.argv[1]))
+PYSUM
+)"
+    [ -n "$SUM68" ] && WHY68="$WHY68 · $SUM68"
+  fi
+  fail_json 68 "$WHY68"
 fi
 
 # ── ⑨ 산출 파싱 ─────────────────────────────────────────────────────────────
-python3 - "$CHILD_OUT" "$OUT" "$ELAPSED" <<'PYPARSE'
-import io, json, sys
+python3 - "$CHILD_OUT" "$OUT" "$ELAPSED" "$REPORT_FILE" <<'PYPARSE'
+import io, json, os, sys
 child, out, elapsed = sys.argv[1], sys.argv[2], sys.argv[3]
+report = sys.argv[4] if len(sys.argv) > 4 else ""
 try:
     d = json.load(io.open(child, encoding="utf-8"))
 except Exception as e:
     json.dump({"_error": "child_json_unreadable", "_detail": str(e), "_raw": ""},
               io.open(out, "w", encoding="utf-8"))
     sys.exit(3)
+# ⭐ 파일이 정본이다(위 OUTPUT CONTRACT). 없거나 깨졌으면 마지막 메시지로 폴백한다.
+#   두 경로를 두는 이유: 파일 쓰기는 도구라 작은 모델도 하지만, 큰 모델은 마지막 메시지로도
+#   정확히 답한다. 한쪽만 두면 그 모델군에서 멀쩡한 작업이 버려진다.
+inner = None
+src = ""
+if report and os.path.exists(report):
+    try:
+        cand = json.load(io.open(report, encoding="utf-8"))
+        if isinstance(cand, dict):
+            inner, src = cand, "file"
+    except Exception:
+        pass
 r = d.get("result")
 try:
-    inner = json.loads(r) if isinstance(r, str) else r
+    if inner is None:
+        inner = json.loads(r) if isinstance(r, str) else r
+        src = "message"
     if not isinstance(inner, dict):
         raise ValueError("result 가 객체가 아니다")
 except Exception as e:
@@ -332,6 +405,7 @@ u = d.get("usage") or {}
 #   깬다(리뷰 g17) ⇒ 곁 파일에 쓴다. 원장이 그 파일을 읽는다.
 meta = {
     "elapsed_sec": float(elapsed), "turns": d.get("num_turns"), "subtype": d.get("subtype"),
+    "result_source": src,
     "input_tokens": u.get("input_tokens"), "output_tokens": u.get("output_tokens"),
 }
 json.dump(meta, io.open(out + ".meta.json", "w", encoding="utf-8"), ensure_ascii=False)

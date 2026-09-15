@@ -103,7 +103,18 @@ case "$CMD" in
       echo "      api_base: $ENDPOINT"
       echo "      api_key: os.environ/GO_TESTER_API_KEY"
       echo "litellm_settings:"
-      echo "  drop_params: true"
+      # ⛔⛔ `drop_params: true` 를 다시 켜지 마라 (2026-09-15 실측으로 잡았다).
+      #   litellm 은 그 값이 참이면 「업스트림이 안 받는다」고 판단한 파라미터를 **조용히 버린다**.
+      #   그 대상에 `response_format` 이 들어가서, `tester.sh` 의 `--json-schema` 강제가
+      #   업스트림에 닿지 않았다 — 자식은 스키마 없이 **산문**을 돌려주고 `tester.sh` 는
+      #   rc 65 `result_not_json` 으로 닫힌다. 요청은 200 이라 **아무 신호도 없다.**
+      #   ⚠ 그때 사람이 내리는 결론이 「작은 모델이라 스키마를 못 지킨다」인데 **틀렸다** —
+      #     같은 게이트웨이에 `response_format: json_schema` 를 직접 보내면 정확히 지킨다(실측).
+      #   ⭐ 대조군: `drop_params: false` 로 띄운 프록시에서 같은 호출이
+      #     `{"passed":2,"note":"…"}` 를 돌려줬다. 켜고 끄는 것만으로 재현된다.
+      #   ⚠ 끄면 업스트림이 모르는 파라미터에 400 이 날 수 있다 — 그때는 버리지 말고
+      #     그 파라미터를 **이름으로** 지정해 빼라(`additional_drop_params`).
+      echo "  drop_params: false"
       echo "general_settings:"
       echo "  master_key: $MKEY"
     } > "$CFG_FILE"
