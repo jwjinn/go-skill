@@ -71,7 +71,20 @@ for w in ws:
     res = w.get("resource") or {}
     # 회수 여부의 정본은 `releaseCompletedAt` 이다. 상태 이름은 런타임마다 달라진다.
     held = bool(res) and not res.get("releaseCompletedAt")
-    a = runs.setdefault(r, {"live": 0, "held": [], "n": 0})
+    # ⛔⛔ 다만 **코디네이터가 닫을 수 없는 자원**은 「안 한 것」이 아니다 (2026-09-16 실측).
+    #   `worker-release` 는 사용자가 인수한 터미널을 구조적으로 닫지 않는다(그 명령의 Notes:
+    #   "Never closes ... user-taken-over terminals"). 그때 자원은 영원히
+    #   `releaseCompletedAt: null` 로 남고, 그것을 미회수로 세면 이 게이트가 **세션당 상한
+    #   여덟 번을 다 쓸 때까지 막는다** — 코디네이터가 할 수 있는 일이 없는데도.
+    #   실측: 워커 일곱을 회수하고 워크트리까지 지웠는데 일곱 전부
+    #   `retainedReason: "user_takeover"` 로 남았고, `worker-release` 를 다시 불러도 같은
+    #   사유만 돌아왔다. 워크트리는 사라졌으니 「자원이 살아 있다」도 사실이 아니다.
+    #   ⇒ 그 사유는 **사람 몫**으로 빼고 세지 않는다. 대신 아래에서 한 줄로 알린다.
+    if held and str(res.get("retainedReason") or "") in ("user_takeover",):
+        held = False
+        a_tk = runs.setdefault(r, {"live": 0, "held": [], "n": 0, "takeover": []})
+        a_tk.setdefault("takeover", []).append(w.get("dispatchId"))
+    a = runs.setdefault(r, {"live": 0, "held": [], "n": 0, "takeover": []})
     a["n"] += 1
     if live: a["live"] += 1
     if held: a["held"].append(w.get("dispatchId"))

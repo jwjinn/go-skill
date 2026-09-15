@@ -39,6 +39,11 @@ w() { # w <state> <dispatchStatus> <releaseCompletedAt|null> <id> <handle>
     "$4" "$1" "$2" "$5" "$3"
 }
 
+wr() { # wr <state> <dispatchStatus> <releaseCompletedAt|null> <id> <handle> <retainedReason>
+  printf '{"dispatchId":"%s","runId":"run_x","workerState":"%s","dispatchStatus":"%s","agentTerminalHandle":"%s","resource":{"releaseCompletedAt":%s,"retainedReason":"%s"}}' \
+    "$4" "$1" "$2" "$5" "$3" "$6"
+}
+
 echo "== t1. 전원 끝났는데 자원이 남아 있으면 막는다 =="
 printf '{"result":{"workers":[%s,%s]}}' \
   "$(w succeeded completed null ctx_a term_a)" "$(w succeeded completed null ctx_b term_b)" > "$SB/held.json"
@@ -127,6 +132,31 @@ echo "== t13. ⭐ 대조군 — 표식이 있어도 **아직 도는 워커**가 
 printf '{"run":"run_x","reason":"소스 교차","at":"2026-09-15T22:00:00+09:00"}\n' > "$SB/go-fanout/deferred.run_x.json"
 mk_orca "$SB/live.json"; eq "도는 워커가 있으면 그대로 통과(막을 이유가 없다)" "$(run)" "0"
 rm -f "$SB/go-fanout/deferred.run_x.json"
+
+echo "== t14. ⛔ **코디네이터가 닫을 수 없는 자원**은 미회수로 세지 않는다 (2026-09-16) =="
+# `worker-release` 는 사용자가 인수한 터미널을 구조적으로 닫지 않는다(그 명령의 Notes 가
+# "Never closes ... user-taken-over terminals"). 그것을 미회수로 세면 코디네이터가 할 수 있는
+# 일이 없는데도 게이트가 세션당 상한 여덟 번을 다 쓸 때까지 막는다.
+printf '{"result":{"workers":[%s,%s]}}' \
+  "$(wr succeeded completed null ctx_tk1 term_tk1 user_takeover)" \
+  "$(wr succeeded completed null ctx_tk2 term_tk2 user_takeover)" > "$SB/takeover.json"
+mk_orca "$SB/takeover.json"; eq "user_takeover 만 남았으면 통과" "$(run)" "0"
+
+echo "== t15. ⭐ 대조군 — **다른 사유**의 보류는 그대로 막는다 =="
+# 이것이 없으면 위 완화가 「사유를 안 보고 전부 통과」로 흘러가도 아무도 모른다.
+printf '{"result":{"workers":[%s,%s]}}' \
+  "$(wr succeeded completed null ctx_o1 term_o1 pending_cleanup)" \
+  "$(wr succeeded completed null ctx_o2 term_o2 pending_cleanup)" > "$SB/other.json"
+mk_orca "$SB/other.json"; eq "다른 사유는 차단" "$(run)" "2"
+
+echo "== t16. ⭐ 대조군 — **섞여 있으면** 나머지만 세어 막는다 =="
+# user_takeover 하나가 섞였다고 나머지가 면제되면 안 된다.
+printf '{"result":{"workers":[%s,%s]}}' \
+  "$(wr succeeded completed null ctx_m1 term_m1 user_takeover)" \
+  "$(w succeeded completed null ctx_m2 term_m2)" > "$SB/mixed.json"
+mk_orca "$SB/mixed.json"; eq "섞이면 나머지로 차단" "$(run)" "2"
+grep -q 'ctx_m2' "$SB/err" && ok "막는 자원만 나열한다" || bad "목록이 없다" "$(cat "$SB/err")"
+grep -q 'ctx_m1' "$SB/err" && bad "닫을 수 없는 자원까지 나열한다" "$(cat "$SB/err")" || ok "user_takeover 는 목록에서 뺀다"
 
 echo
 echo "검사 $((PASS+FAIL))개 · 통과 $PASS · 실패 $FAIL"
