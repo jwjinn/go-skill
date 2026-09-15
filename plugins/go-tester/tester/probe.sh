@@ -55,7 +55,16 @@ emit() { # emit <available> <reason> <latency_ms>
 }
 
 if [ -z "$ENDPOINT" ] || [ -z "$MODEL" ]; then
-  emit false "구성에 endpoint·model 이 없다(.claude/tester/config.json 에 적어라)" 0
+  # ⚠ 「구성이 없다」와 「구성을 못 찾았다」는 다르다 — 고칠 곳이 정반대다.
+  #   `_config.py` 는 CLAUDE_PROJECT_DIR(없으면 cwd)를 기준으로 프로젝트 구성을 찾는다.
+  #   프로젝트 밖에서 부르면 구성이 멀쩡히 있어도 값이 비어 오고, 종전 문안은 그것을
+  #   「config.json 에 적어라」로 말해 사람을 파일 고치러 보냈다(실측 2026-09-15).
+  _root="${CLAUDE_PROJECT_DIR:-$PWD}"
+  if [ -f "$_root/.claude/tester/config.json" ]; then
+    emit false "구성을 읽었는데 endpoint·model 이 비어 있다($_root/.claude/tester/config.json 을 확인해라)" 0
+  else
+    emit false "이 자리에서는 구성을 못 찾았다(기준=$_root · 여기에 .claude/tester/config.json 이 없다). 프로젝트 디렉토리에서 부르거나 CLAUDE_PROJECT_DIR 를 줘라 — 파일을 고치기 전에 그것부터 확인해라" 0
+  fi
   exit 1
 fi
 
