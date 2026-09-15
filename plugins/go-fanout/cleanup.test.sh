@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# cleanup.sh 의 판정·회수·보존 로직을 스텁(orca·gh)으로 잰다.
+# ⭐ 대조군이 있다 — 「게이트가 hold 를 낸다」는 그 게이트를 풀었을 때 ready 가 나와야 참이다.
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+SUT="$HERE/cleanup.sh"
+T="$(mktemp -d)"
+trap 'rm -rf "$T"' EXIT
+
+PASS=0; FAIL=0
+ok()   { PASS=$((PASS+1)); echo "  ✅ $1"; }
+bad()  { FAIL=$((FAIL+1)); echo "  ❌ $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/     /'; }
+check(){ if eval "$2"; then ok "$1"; else bad "$1" "${3:-}"; fi; }
+
+# ── 스텁 ────────────────────────────────────────────────────────────────────
+mkdir -p "$T/bin"
+cat > "$T/bin/orca" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "$STUB_LOG"
+case "$1 $2" in
+  "orchestration worker-list") cat "$STUB_WORKERS" ;;
+  "orchestration worker-release") echo '{"ok":true}' ;;
+  "worktree rm")
+    # 실제 Orca 동작을 흉내낸다: ①미커밋 파일이 하나라도 있으면 거부한다(실측 2026-09-07)
+    # ②워크트리를 지우고 **체크아웃된 브랜치도 지운다**.
+    p="${4#path:}"
+    dirty="$(git -C "$p" status --porcelain -uall 2>/dev/null | head -1)"
+    if [ -n "$dirty" ]; then
+      printf '{"ok": false, "error": {"message": "Failed to delete worktree at %s. %s"}}\n' "$p" "$dirty"
+      exit 1
+    fi
+    br="$(git -C "$p" symbolic-ref --short -q HEAD 2>/dev/null)"
+    common="$(git -C "$p" rev-parse --git-common-dir)"
+    case "$common" in /*) ;; *) common="$p/$common" ;; esac
+    git -C "$p" worktree remove --force "$p" 2>/dev/null || rm -rf "$p"
+    [ -n "$br" ] && git --git-dir="$common" branch -D "$br" >/dev/null 2>&1
+    echo '{"ok":true}' ;;
+  *) echo '{"ok":true}' ;;
+esac
+EOF
+cat > "$T/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+# gh pr list --head <branch> ... → $STUB_PR 파일에서 "<branch> <STATE>" 를 찾는다
+br=""; while [ $# -gt 0 ]; do [ "$1" = "--head" ] && br="$2"; shift; done
+awk -v b="$br" '$1==b {print $2}' "$STUB_PR"
+EOF
+chmod +x "$T/bin/orca" "$T/bin/gh"
+export ORCA_BIN="$T/bin/orca" GH_BIN="$T/bin/gh"
+export STUB_LOG="$T/orca.log" STUB_WORKERS="$T/workers.json" STUB_PR="$T/pr.txt"
+export FANOUT_ARCHIVE_DIR="$T/archive"
+
+# ── 가짜 레포 + 워크트리 ─────────────────────────────────────────────────────
+REPO="$T/repo"
+git init -q -b main "$REPO"
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+mk_wt() {  # $1 이름 → 워크트리 경로 출력
+  local p="$T/wt/$1"
+  git -C "$REPO" worktree add -q -b "feat/$1" "$p" main
+  echo "$p"
+}
+WT_MERGED_CLEAN="$(mk_wt merged-clean)"
+WT_MERGED_HARVEST="$(mk_wt merged-harvest)"
+WT_MERGED_CODE="$(mk_wt merged-code)"
+WT_OPEN="$(mk_wt open-pr)"
+WT_RUNNING="$(mk_wt running)"
+WT_GONE="$T/wt/gone"   # 만들지 않는다
+
+mkdir -p "$WT_MERGED_HARVEST/.claude" "$WT_MERGED_HARVEST/docs/리뷰-이력"
+echo "7절 보고" > "$WT_MERGED_HARVEST/.claude/go-report.md"
+echo "라운드" > "$WT_MERGED_HARVEST/docs/리뷰-이력/2026-09.md"
+echo "real code" > "$WT_MERGED_CODE/main.go"
+
+cat > "$STUB_PR" <<EOF
+feat/merged-clean MERGED
+feat/merged-harvest MERGED
+feat/merged-code MERGED
+feat/open-pr OPEN
+feat/running MERGED
+EOF
+
+worker() { printf '{"runId":"%s","dispatchId":"%s","workerState":"%s","terminalState":"retained","resource":{"worktreeId":"repo::%s"}}' "$@"; }
+write_workers() {  # 인자: worker JSON 들
+  local IFS=,; printf '{"ok":true,"result":{"workers":[%s]}}' "$*" > "$STUB_WORKERS"
+}
+write_workers \
+  "$(worker run_A d1 succeeded "$WT_MERGED_CLEAN")" \
+  "$(worker run_A d2 succeeded "$WT_MERGED_HARVEST")" \
+  "$(worker run_A d3 succeeded "$WT_MERGED_CODE")" \
+  "$(worker run_A d4 succeeded "$WT_OPEN")" \
+  "$(worker run_A d5 running   "$WT_RUNNING")" \
+  "$(worker run_A d6 succeeded "$WT_GONE")" \
+  "$(worker run_A d7 succeeded "$WT_MERGED_CLEAN")"
+
+row() { printf '%s\n' "$1" | grep -F "$2" | head -1; }
+
+echo "▶ dry-run 판정"
+: > "$STUB_LOG"
+OUT="$(bash "$SUT" 2>&1)"; RC=$?
+check "t1 미머지 PR → hold"            "row \"\$OUT\" open-pr | grep -q 'hold.*MERGED 가 아니다'" "$OUT"
+check "t2 미커밋 코드 → hold"           "row \"\$OUT\" merged-code | grep -q 'hold.*코드 변경 1건'" "$OUT"
+check "t3 리뷰이력·보고서만 dirty → ready" "row \"\$OUT\" merged-harvest | grep -q ready" "$OUT"
+check "t4 워커 running → hold"           "row \"\$OUT\" running | grep -q 'hold.*settled'" "$OUT"
+check "t5 경로 없음 → gone"              "row \"\$OUT\" 'gone ' | grep -q '이미 정리됨'" "$OUT"
+check "t6 dry-run 은 rm 을 부르지 않는다" "! grep -q 'worktree rm' \"\$STUB_LOG\" && [ $RC -eq 0 ]" "$(cat "$STUB_LOG")"
+check "t6b dry-run 은 아카이브도 만들지 않는다" "[ ! -d \"$FANOUT_ARCHIVE_DIR\" ]"
+check "t6c 같은 경로의 두 번째 dispatch 는 dup(release 만)" "grep -c 'merged-clean' <<< \"\$OUT\" | grep -qx 2 && grep -q 'dup .*release 만' <<< \"\$OUT\"" "$OUT"
+
+echo "▶ 대조군 — 게이트를 풀면 hold 가 ready 로 바뀌어야 한다"
+sed -i '' 's/^feat\/open-pr OPEN$/feat\/open-pr MERGED/' "$STUB_PR"
+rm "$WT_MERGED_CODE/main.go"
+OUT2="$(bash "$SUT" 2>&1)"
+check "t7a PR 을 MERGED 로 바꾸면 open-pr 이 ready" "row \"\$OUT2\" open-pr | grep -q ready" "$OUT2"
+check "t7b 코드 dirty 를 지우면 merged-code 가 ready" "row \"\$OUT2\" merged-code | grep -q ready" "$OUT2"
+# 원상 복구
+sed -i '' 's/^feat\/open-pr MERGED$/feat\/open-pr OPEN/' "$STUB_PR"
+echo "real code" > "$WT_MERGED_CODE/main.go"
+
+echo "▶ --run 필터·gh 부재·orca 무응답"
+: > "$STUB_LOG"
+bash "$SUT" --run run_X >/dev/null 2>&1
+check "t8 --run 이 orca worker-list 에 전달된다" "grep -q 'worker-list --json --run run_X' \"\$STUB_LOG\"" "$(cat "$STUB_LOG")"
+OUT3="$(GH_BIN=/nonexistent/gh bash "$SUT" 2>&1)"
+check "t9 gh 없으면 머지 판정 불가로 hold(열지 않는다)" "row \"\$OUT3\" merged-clean | grep -q 'hold.*gh 없음'" "$OUT3"
+OUT4="$(STUB_WORKERS=/dev/null bash "$SUT" 2>&1)"; RC4=$?
+check "t10 orca 가 빈 응답이면 중단(exit≠0)" "[ $RC4 -ne 0 ] && grep -q '중단' <<< \"\$OUT4\"" "$OUT4"
+
+echo "▶ --apply — 회수·release·삭제·브랜치 보존"
+: > "$STUB_LOG"
+OUT5="$(bash "$SUT" --apply 2>&1)"; RC5=$?
+A="$FANOUT_ARCHIVE_DIR/run_A"
+check "t11 exit 0"                                   "[ $RC5 -eq 0 ]" "$OUT5"
+check "t12 ready 2개만 삭제됐다(rm 호출 2)"           "[ \"\$(grep -c 'worktree rm' \"\$STUB_LOG\")\" = 2 ]" "$(cat "$STUB_LOG")"
+check "t13 hold 워크트리는 그대로 있다"              "[ -d \"$WT_MERGED_CODE\" ] && [ -d \"$WT_OPEN\" ] && [ -d \"$WT_RUNNING\" ]"
+check "t14 ready 워크트리는 사라졌다"                "[ ! -d \"$WT_MERGED_CLEAN\" ] && [ ! -d \"$WT_MERGED_HARVEST\" ]"
+check "t15 아카이브에 go-report.md 가 회수됐다"      "[ -f \"$A/merged-harvest/files/.claude/go-report.md\" ]" "$(find "$A" 2>/dev/null)"
+check "t16 아카이브에 리뷰 이력이 회수됐다"          "[ -f \"$A/merged-harvest/files/docs/리뷰-이력/2026-09.md\" ]"
+check "t17 아카이브에 git-status·meta 가 있다"       "[ -s \"$A/merged-harvest/git-status.txt\" ] && grep -q 'branch:   feat/merged-harvest' \"$A/merged-harvest/meta.txt\""
+check "t18 release 가 ready 각각에 불렸다"           "grep -q 'worker-release --dispatch d1' \"\$STUB_LOG\" && grep -q 'worker-release --dispatch d2' \"\$STUB_LOG\""
+check "t18b dup dispatch 도 release 됐고 rm 은 안 늘었다" "grep -q 'worker-release --dispatch d7' \"\$STUB_LOG\"" "$(cat "$STUB_LOG")"
+check "t19 ⭐ 브랜치가 남아 있다(스텁 Orca 가 지우려 했는데도)" \
+      "git -C \"$REPO\" show-ref --verify -q refs/heads/feat/merged-clean && git -C \"$REPO\" show-ref --verify -q refs/heads/feat/merged-harvest" \
+      "$(git -C "$REPO" branch)"
+check "t20 출력이 브랜치 보존을 말한다"              "grep -q '브랜치 feat/merged-clean 보존' <<< \"\$OUT5\"" "$OUT5"
+
+echo "▶ 대조군 — 스텁 Orca 가 미커밋 파일을 정말 거부하는가(t14~t16 이 「치운 뒤 삭제」를 증명하려면 필요)"
+WT_DIRTY="$(mk_wt dirty-ctrl)"
+echo x > "$WT_DIRTY/junk.txt"
+"$ORCA_BIN" worktree rm --worktree "path:$WT_DIRTY" --json >/dev/null 2>&1; RCD=$?
+check "t20b 미커밋이 있으면 스텁 rm 이 거부한다(exit≠0 · 워크트리 잔존)" "[ $RCD -ne 0 ] && [ -d \"$WT_DIRTY\" ]"
+
+echo "▶ 대조군 — detach 를 빼면 스텁 Orca 가 브랜치를 실제로 지운다(t19 가 살아 있음을 증명)"
+WT_CTRL="$(mk_wt ctrl)"
+echo "feat/ctrl MERGED" >> "$STUB_PR"
+"$ORCA_BIN" worktree rm --worktree "path:$WT_CTRL" --json >/dev/null
+check "t21 detach 없이 rm 하면 브랜치가 사라진다" "! git -C \"$REPO\" show-ref --verify -q refs/heads/feat/ctrl" "$(git -C "$REPO" branch)"
+
+echo "▶ 멱등"
+OUT6="$(bash "$SUT" --apply 2>&1)"; RC6=$?
+check "t22 두 번째 --apply 는 이미 정리된 것을 gone 으로 보고 exit 0" "[ $RC6 -eq 0 ] && row \"\$OUT6\" merged-clean | grep -q gone" "$OUT6"
+
+echo
+echo "통과 $PASS · 실패 $FAIL"
+[ "$FAIL" -eq 0 ]
