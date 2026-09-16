@@ -353,7 +353,9 @@ python3 ${CLAUDE_PLUGIN_ROOT}/review/_render.py "$ROUND/merged.json" "$ROUND/mer
 
 ## ⑥ 반영 — 여기까지가 리뷰다
 
-`must_fix` 를 **체크박스로** `.claude/review-active.md` 에 쓴다:
+`must_fix` 를 **체크박스로** 계획 옆 `.claude/plans/<slug>/review.md` 에 **Write 도구로** 쓴다
+(계획이 레거시 `plan-active.md` 면 `review-active.md`). 채택 흔적이 Write/Edit 호출이라 Bash 로 쓰면
+`review-gate.sh` 가 그 파일을 이 세션의 것으로 보지 않는다:
 
 ```markdown
 # 리뷰 반영 — <라운드 경로>
@@ -364,12 +366,11 @@ python3 ${CLAUDE_PLUGIN_ROOT}/review/_render.py "$ROUND/merged.json" "$ROUND/mer
 
 ⚠ Stop 훅(`review-gate.sh`)이 이 파일을 읽는다. **확정된 결함을 미해결로 두고 턴을 끝낼 수 없다.**
 
-⚠⚠ **경로는 이 하나뿐이다.** 세션별 리뷰 파일(`.claude/reviews/<id>.md`)을 만들려 하지 마라 —
-2026-09-02 에 훅에 그 분기를 넣었다가 되돌렸다(모델이 자기 `session_id` 를 알 수단이 없어
-아무도 그 파일을 만들지 못했고, 리뷰어 셋이 전원 「생산자 없는 죽은 분기」로 지목했다).
-같은 워킹트리에서 세션 둘이 각자 리뷰를 돌려야 하면 **워크트리를 나누거나** 세션을
-`CLAUDE_REVIEW_FILE` 을 설정해 띄워라.
-⚠ 공용 파일에 **남의 미해결 항목**이 있으면 지우지 말고 사용자에게 그 사실을 말해라.
+⚠⚠ **경로는 계획이 정한다.** 2026-09-16 고유화로 리뷰 파일은 계획 디렉토리 안에 있고,
+`review-gate.sh` 는 **이 세션이 채택한 계획의 리뷰 파일만** 막는다. 종전 안내 「세션별 리뷰 파일을
+만들지 마라(2026-09-02)」는 폐기됐다 — 그때는 세션 번호로 가르려 했고, 지금은 행위 흔적으로 가른다.
+다른 이름을 지어내지 마라(`.claude/reviews/<id>.md` 류) — 게이트가 보지 않는 파일은 반영을 집행하지 못한다.
+⚠ 레거시 공용 파일에 **남의 미해결 항목**이 있으면 지우지 말고 사용자에게 그 사실을 말해라.
 
 1. 고치고 `[x]` 로 닫는다.
 2. **기각할 항목**은 `[x]` 로 위장하지 말고 **줄을 지우고 사용자에게 사유를 말해라.**
@@ -399,7 +400,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/review/_render.py "$ROUND/merged.json" "$ROUND/mer
 
    ⚠ 반영 중 **새 결함을 만들었다고 스스로 판단하면** 그것은 재리뷰가 아니라 구현이다 — 고치고
    그 사실을 보고에 적어라. 「리뷰를 한 번 더 돌릴까」로 바꾸지 마라.
-5. 전부 닫히면 `.claude/review-active.md` 를 지운다.
+5. 전부 닫히면 그 리뷰 파일을 지운다(계획 디렉토리 자체는 계획이 끝날 때 함께 지운다).
 
 ---
 

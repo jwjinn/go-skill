@@ -356,13 +356,68 @@ run "대조군: /goal 은 /go 가 아니다" "$PSC" "$D/tr-n4.jsonl" s-sn4 WARN
 # 채택한 세션의 나머지 동작(상한·진전 없음·남의 계획 진단)은 위 절들이 tr_with_user 로 그대로 잠근다.
 
 # ⭐ 사보타주 — 채택 판별을 빼면(항상 채택으로 보면) 남의 계획도 막는다. 그것이 종전 결함이다.
-SAB2="$D/gate-sab2.sh"
-sed -e 's/\[ "\$claim_rc" -eq 1 \]/false/' "$H" > "$SAB2"
+# ⚠ 채택 판별은 이제 `_planpath.sh` 의 `plan_pick` 안에 있다(고유화 · 2026-09-16). 게이트 사본만 만들면
+#   그 사본이 옆의 `_planpath.sh` 를 못 찾아 조용히 통과한다 — 사보타주가 「발화하지 않음」으로 보여
+#   거짓 안심이 된다. 그래서 **공용 함수 사본을 사보타주해서 같은 디렉토리에 둔다.**
+SABD="$D/sab2"; mkdir -p "$SABD"
+cp "$SELF"/_deps.sh "$SABD"/ 2>/dev/null || true
+sed -e 's/\[ "\$_pp_rc" -ne 1 \]/true/' "$SELF/_planpath.sh" > "$SABD/_planpath.sh"
+cp "$H" "$SABD/plan-file-gate.sh"; SAB2="$SABD/plan-file-gate.sh"
 o=$(CLAUDE_PLAN_FILE="$PSC" printf '{"session_id":"s-sab2","transcript_path":"%s","stop_hook_active":false}' "$TRP" \
     | CLAUDE_PLAN_FILE="$PSC" bash "$SAB2")
 chk "⭐ 사보타주(채택 판별 제거)하면 남의 계획을 막는다 — 이 절이 그것을 지킨다" "$o" '"block"' yes
-rm -f "$SAB2" "${TMPDIR:-/tmp}"/claude-plan-gate-s-sab2 "${TMPDIR:-/tmp}"/claude-plan-progress-s-sab2
+rm -rf "$SABD"; rm -f "${TMPDIR:-/tmp}"/claude-plan-gate-s-sab2 "${TMPDIR:-/tmp}"/claude-plan-progress-s-sab2
 rm -f "${TMPDIR:-/tmp}"/claude-plan-foreign-s-s* "${TMPDIR:-/tmp}"/claude-plan-gate-s-sc* "${TMPDIR:-/tmp}"/claude-plan-progress-s-sc* 2>/dev/null
+
+echo
+echo "=== ⭐⭐ 고유화 — 계획마다 디렉토리 · 이 세션이 채택한 것만 막는다 (2026-09-16)"
+# 사용자 지시: 「확실히 보장이 필요해. 다른 세션의 플랜과 이 세션의 플랜이 겹치지 않는 것」
+# 여기서는 CLAUDE_PLAN_FILE 을 주지 않는다 — 후보 탐색(`plan_candidates`) 자체를 재야 한다.
+UQ="$D/uq"; mkdir -p "$UQ/.claude/plans/20260916-mine" "$UQ/.claude/plans/20260916-theirs"
+printf -- '- [ ] 내 일 1\n- [ ] 내 일 2\n' > "$UQ/.claude/plans/20260916-mine/plan.md";   touch_at "$UQ/.claude/plans/20260916-mine/plan.md" "$T_NEW"
+printf -- '- [ ] 남의 일\n'                > "$UQ/.claude/plans/20260916-theirs/plan.md"; touch_at "$UQ/.claude/plans/20260916-theirs/plan.md" "$T_NEW"
+ts_o=$(date -j -u -f %s "$T_OLD" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$T_OLD" +%Y-%m-%dT%H:%M:%S)
+# 내 transcript: plans/20260916-mine/plan.md 를 Write 했다
+{ printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_o}.000Z\",\"message\":{\"content\":\"해줘\"}}"
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"$UQ/.claude/plans/20260916-mine/plan.md\",\"content\":\"x\"}}]}}"
+} > "$UQ/tr-mine.jsonl"
+# 남의 transcript: theirs 를 Write 했다
+{ printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_o}.000Z\",\"message\":{\"content\":\"해줘\"}}"
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"$UQ/.claude/plans/20260916-theirs/plan.md\",\"content\":\"x\"}}]}}"
+} > "$UQ/tr-theirs.jsonl"
+# 아무것도 안 쓴 transcript
+tr_plain "$UQ/tr-none.jsonl" "$T_OLD"
+rm -f "${TMPDIR:-/tmp}"/claude-plan-gate-s-uq* "${TMPDIR:-/tmp}"/claude-plan-progress-s-uq* "${TMPDIR:-/tmp}"/claude-plan-foreign-s-uq* 2>/dev/null
+uq() { # $1=label $2=transcript $3=session $4=expect $5=(선택) 차단 문구에 있어야 할 것 $6=없어야 할 것
+  out=$(printf '{"session_id":"%s","transcript_path":"%s","stop_hook_active":false}' "$3" "$2" | CLAUDE_PROJECT_DIR="$UQ" bash "$H")
+  got=$(printf '%s' "$out" | jq -r 'if .decision then .decision elif .systemMessage then "WARN" else "PASS" end' 2>/dev/null); [ -z "$got" ] && got=PASS; [ "$got" = block ] && got=BLOCK
+  if [ "$got" = "$4" ]; then echo "  ok   $1  → $got"; pass=$((pass+1)); else echo "  FAIL $1  → got=$got want=$4"; fail=$((fail+1)); fi
+  [ -n "${5:-}" ] && { printf '%s' "$out" | grep -q -- "$5" && { echo "  ok   … 문구에 '$5'"; pass=$((pass+1)); } || { echo "  FAIL … 문구에 '$5' 없음"; fail=$((fail+1)); }; }
+  [ -n "${6:-}" ] && { printf '%s' "$out" | grep -q -- "$6" && { echo "  FAIL … 문구에 '$6' 있음(남의 계획이 섞였다)"; fail=$((fail+1)); } || { echo "  ok   … '$6' 는 없다"; pass=$((pass+1)); }; }
+}
+uq "내 transcript → 내 계획만 차단(남의 것은 문구에 없다)" "$UQ/tr-mine.jsonl"   s-uq1 BLOCK "20260916-mine" "20260916-theirs"
+uq "남의 transcript → 남의 계획만 차단(내 것은 없다)"     "$UQ/tr-theirs.jsonl" s-uq2 BLOCK "20260916-theirs" "20260916-mine"
+uq "아무것도 안 쓴 세션 → 둘 다 남의 것 → 알림(개수 2)"   "$UQ/tr-none.jsonl"   s-uq3 WARN  "계획 2개"
+uq "같은 세션 2회차 → 조용"                               "$UQ/tr-none.jsonl"   s-uq3 PASS
+# 레거시와 공존 — legacy 를 쓴 세션은 legacy 만 막힌다
+printf -- '- [ ] 레거시 일\n' > "$UQ/.claude/plan-active.md"; touch_at "$UQ/.claude/plan-active.md" "$T_NEW"
+{ printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_o}.000Z\",\"message\":{\"content\":\"해줘\"}}"
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"$UQ/.claude/plan-active.md\",\"old_string\":\"a\",\"new_string\":\"b\"}}]}}"
+} > "$UQ/tr-legacy.jsonl"
+uq "레거시 plan-active.md 를 쓴 세션 → 그것만 차단(plans/ 는 섞이지 않는다)" "$UQ/tr-legacy.jsonl" s-uq4 BLOCK "plan-active.md" "20260916-"
+# ⭐⭐ go 호출만 있는 세션(Write 0) — slug 계획 둘은 어느 것도 채택이 아니다(실증 2026-09-16: 다른 세션의 /go 1회가 내 계획을 잡았다)
+rm -f "$UQ/.claude/plan-active.md"
+{ printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_o}.000Z\",\"message\":{\"content\":\"<command-name>/go-review:go</command-name>\"}}"
+} > "$UQ/tr-goonly.jsonl"
+uq "go 호출만 있고 Write 0 → slug 계획은 채택 아님 → 알림(둘 다 남의 것)" "$UQ/tr-goonly.jsonl" s-uq6 WARN "계획 2개"
+# … 같은 기록이라도 레거시 plan-active.md 가 있으면 그것은 go 호출로 채택된다(종전 동작 유지)
+printf -- '- [ ] 레거시 일\n' > "$UQ/.claude/plan-active.md"; touch_at "$UQ/.claude/plan-active.md" "$T_NEW"
+uq "go 호출만 + 레거시 존재 → 레거시만 차단(slug 는 섞이지 않는다)" "$UQ/tr-goonly.jsonl" s-uq7 BLOCK "plan-active.md" "20260916-"
+# 환경 지정은 파일을 좁힌다 — 그 파일을 채택했으면 차단
+o=$(CLAUDE_PLAN_FILE="$UQ/.claude/plans/20260916-mine/plan.md" printf '{"session_id":"s-uq5","transcript_path":"%s","stop_hook_active":false}' "$UQ/tr-mine.jsonl" | CLAUDE_PLAN_FILE="$UQ/.claude/plans/20260916-mine/plan.md" CLAUDE_PROJECT_DIR="$UQ" bash "$H")
+chk "CLAUDE_PLAN_FILE 로 좁힌 내 계획 → 차단" "$o" '"block"' yes
+chk "… 그때 남의 계획은 문구에 없다"          "$o" '20260916-theirs' no
+rm -f "${TMPDIR:-/tmp}"/claude-plan-gate-s-uq* "${TMPDIR:-/tmp}"/claude-plan-progress-s-uq* "${TMPDIR:-/tmp}"/claude-plan-foreign-s-uq* 2>/dev/null
 
 echo "pass=$pass fail=$fail"
 rm -rf "$D"

@@ -41,6 +41,7 @@ HARVEST_PATHS=(
   ".claude/plan-active.md"
   ".claude/plan-draft.md"
   ".claude/review-active.md"
+  ".claude/plans"
   ".claude/state"
   ".claude/review/runs"
   "docs/리뷰-이력"

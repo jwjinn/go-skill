@@ -41,16 +41,32 @@ session=$(printf '%s' "$input" | jq -r '.session_id // "unknown"' 2>/dev/null) |
 # ⭐ 경로·결정 절 파싱은 **공용 함수**를 쓴다(`_planpath.sh`). 세 훅이 각자 하면 갈라진다 —
 #   실제로 owner 파싱이 그랬고, 2026-09-03 리뷰가 결정 절 정규식에서 같은 부류를 다시 지목했다.
 . "$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/_planpath.sh" 2>/dev/null || true
-if [ -n "${CLAUDE_PLAN_FILE:-}" ]; then
-  plan="$CLAUDE_PLAN_FILE"
-elif command -v plan_base >/dev/null 2>&1; then
-  plan="$(plan_base)/plan-active.md"
-elif [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
-  plan="$CLAUDE_PROJECT_DIR/.claude/plan-active.md"
-else
-  plan="${PWD}/.claude/plan-active.md"
+# ⭐⭐ 고유화(2026-09-16) — 후보 여럿 가운데 **이 세션이 채택한** 계획만 되읽는다(`plan_pick`).
+#   완주 게이트와 같은 함수다 — 같은 사실을 두 훅이 다르게 알면 안 된다.
+#   예외 하나: 지금 프롬프트가 go 호출이고 미완료 후보가 **하나뿐**이면 그것을 되읽는다
+#   (그 턴에 채택될 계획이다). 둘 이상이면 어느 것인지 모르므로 되읽지 않는다.
+transcript=$(printf '%s' "$input" | jq -r '.transcript_path // ""' 2>/dev/null)
+prompt=$(printf '%s' "$input" | jq -r '.prompt // ""' 2>/dev/null)
+base=$(plan_base 2>/dev/null) || base="${CLAUDE_PROJECT_DIR:-$PWD}/.claude"
+plan=$(plan_pick "$base" "$transcript" 2>/dev/null) || plan=''
+if [ -z "$plan" ]; then
+  case "$prompt" in
+    *"<command-name>/go</command-name>"*|*"<command-name>/go-review:go</command-name>"*|/go|/go\ *|"/go"$'\n'*|/go-review:go|/go-review:go\ *|"/go-review:go"$'\n'*)
+      n_c=0; only=''
+      while IFS= read -r c; do
+        [ -n "$c" ] && [ -f "$c" ] || continue
+        l=$(grep -cE '^[[:space:]]*[-*+][[:space:]]+\[[^xX]\]' "$c" 2>/dev/null || printf '0')
+        case "$l" in ''|*[!0-9]*) l=0 ;; esac
+        [ "$l" -gt 0 ] || continue
+        n_c=$((n_c+1)); only="$c"
+      done <<EOF
+$(plan_candidates "$base")
+EOF
+      [ "$n_c" -eq 1 ] && plan="$only"
+      ;;
+  esac
 fi
-[ -f "$plan" ] || exit 0
+[ -n "$plan" ] && [ -f "$plan" ] || exit 0
 
 # ㉡ 미완료가 남았는가 — 다 끝난 계획은 되읽을 목표가 없다
 # ⚠⚠ **결정 절의 체크박스는 「해야 할 단계」가 아니다**(2026-09-03 리뷰가 지목).
@@ -87,19 +103,7 @@ fi
 # **같아야** 한다(같은 사실을 두 훅이 다르게 알면 안 된다) — 그래서 같은 공용 함수를 쓴다.
 # ⚠ 지금 프롬프트가 곧 go 호출이면 transcript 에 아직 없어도 채택이다(그 턴부터 되읽어야 한다).
 # ⚠ 판별 불가(2)는 종전대로 되읽는다.
-transcript=$(printf '%s' "$input" | jq -r '.transcript_path // ""' 2>/dev/null)
-prompt=$(printf '%s' "$input" | jq -r '.prompt // ""' 2>/dev/null)
-claim_rc=0
-if command -v plan_session_claims >/dev/null 2>&1; then
-  plan_session_claims "$transcript" "$(basename "$plan")"; claim_rc=$?
-fi
-if [ "$claim_rc" -eq 1 ]; then
-  case "$prompt" in
-    *"<command-name>/go</command-name>"*|*"<command-name>/go-review:go</command-name>"*) ;;
-    /go|/go\ *|"/go"$'\n'*|/go-review:go|/go-review:go\ *|"/go-review:go"$'\n'*) ;;
-    *) exit 0 ;;
-  esac
-fi
+# (채택 판별은 위 `plan_pick` 이 했다)
 
 # ── 목표 계약 추출 ───────────────────────────────────────────────────────────
 # 「## 목표 계약」 다음부터 다음 「## 」 전까지. 없으면 그 사실 자체를 말한다

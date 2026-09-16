@@ -49,7 +49,21 @@ esac
 #   실제로 갈라져서 owner 파싱 한쪽만 고친 채로 다른 쪽이 계속 오진했다(정본이 둘).
 . "$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/_planpath.sh" 2>/dev/null || exit 0
 base=$(plan_base) || exit 0
-draft="${CLAUDE_PLAN_DRAFT_FILE:-$base/plan-draft.md}"
+# ⭐⭐ 고유화(2026-09-16) — 초안은 `plans/<slug>/draft.md`(정본) 또는 레거시 `plan-draft.md`.
+#   **이 세션이 쓴 초안**만 채택 후보다(`draft_pick` · 채택 판별은 Write/Edit 흔적). 남의 초안만
+#   있으면 「그대로 옮겨라」를 말하지 않는다 — 그것이 남의 계획을 덮어쓰는 경로였다(2026-09-16 실측:
+#   한 워크트리에서 세션 둘이 각자 초안·계획을 갖고 있었다).
+transcript=$(printf '%s' "$input" | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
+print(d.get("transcript_path") or "")' 2>/dev/null)
+draft_err="${TMPDIR:-/tmp}/claude-draft-pick.$$"
+draft=$(draft_pick "$base" "$transcript" 2>"$draft_err") || draft=''
+n_fdraft=$(grep -c '^foreign:' "$draft_err" 2>/dev/null || printf '0'); rm -f "$draft_err"
+case "$n_fdraft" in ''|*[!0-9]*) n_fdraft=0 ;; esac
+if [ -z "$draft" ] && [ "$n_fdraft" -gt 0 ]; then
+  printf '[/go 사전 확인] ⚠ 이 워크트리에 **다른 세션의 초안 %s개**가 있다 — 네 것이 아니다. **옮기지 마라**(그러면 그 세션의 계획을 덮어쓴다). 네 초안은 `/plan` 으로 `.claude/plans/<slug>/draft.md` 에 새로 써라.\n' "$n_fdraft"
+fi
 
 # 초안이 있고 **최근**인가. 오래된 초안은 지금 승인하는 계획이 아니다.
 max_age=${CLAUDE_PLAN_DRAFT_MAX_AGE_H:-12}
@@ -173,7 +187,9 @@ if [ "$fresh" -eq 1 ]; then
       rec=$(python3 -c 'import io,json,sys
 try: print((json.load(io.open(sys.argv[1],encoding="utf-8")).get("plan_file") or ""))
 except Exception: print("")' "$optin" 2>/dev/null)
-      if [ -n "$rec" ] && [ "$rec" != "$base/plan-active.md" ]; then
+      # ⭐ 고유화 — 비교 대상은 고정 경로가 아니라 **고른 초안이 옮겨질 계획 자리**다
+      case "$draft" in */plans/*/draft.md) target_plan="${draft%/draft.md}/plan.md" ;; *) target_plan="$base/plan-active.md" ;; esac
+      if [ -n "$rec" ] && [ "$rec" != "$target_plan" ]; then
         printf '⚠ 옵트인 기록이 **다른 계획**을 가리킨다(%s) — 이 계획에는 안 먹는다(rc 70). 새로 물어 새로 써라.\n' "$rec"
       else
         printf '⚠ 옵트인 기록이 이미 있다(%s) — 앞 계획의 잔재면 지워라. 자원 회수(go.md §3-c C3)가 그 일이다.\n' "$optin"
@@ -181,7 +197,10 @@ except Exception: print("")' "$optin" 2>/dev/null)
     fi
   fi
 
-  printf '이 초안을 **그대로** plan-active.md 로 옮겨라. 여기서 계획을 다시 쓰지 마라 — 승인된 것은 이 초안이다.\n'
+  case "$draft" in
+    */plans/*/draft.md) printf '이 초안을 **그대로** 같은 디렉토리의 `plan.md` 로 옮겨라(`%s`). 여기서 계획을 다시 쓰지 마라 — 승인된 것은 이 초안이다.\n' "${draft%/draft.md}/plan.md" ;;
+    *)                  printf '이 초안을 **그대로** plan-active.md 로 옮겨라(레거시 자리). 여기서 계획을 다시 쓰지 마라 — 승인된 것은 이 초안이다.\n' ;;
+  esac
   exit 0
 fi
 
@@ -189,8 +208,15 @@ fi
 # ⚠ 이것이 없으면 「기존 계획을 재사용할 수 없다」가 된다(2026-09-02 다른 세션 자가평가
 #   결함 3). 250줄 계획을 손에 들고도 `/go` 가 착수를 거부하고, 사람이 §0-b 를 손으로
 #   대신하게 된다 — 스킬이 하는 일 중 유일하게 사람이 대신한 부분이었다.
-plan="${CLAUDE_PLAN_FILE:-$base/plan-active.md}"
-if [ -f "$plan" ]; then
+# ⭐ 고유화 — 후보 가운데 **이 세션이 채택한** 미완료 계획(`plan_pick`). 남의 것만 있으면 알린다.
+pick_err="${TMPDIR:-/tmp}/claude-plan-pick-pre.$$"
+plan=$(plan_pick "$base" "$transcript" 2>"$pick_err") || plan=''
+n_fplan=$(grep -c '^foreign:' "$pick_err" 2>/dev/null || printf '0'); rm -f "$pick_err"
+case "$n_fplan" in ''|*[!0-9]*) n_fplan=0 ;; esac
+if [ -z "$plan" ] && [ "$n_fplan" -gt 0 ]; then
+  printf '[/go 사전 확인] ⚠ 이 워크트리에 **다른 세션의 미완료 계획 %s개**가 있다 — 네 것이 아니다. 채택하지도 지우지도 마라. 네 계획은 `.claude/plans/<slug>/` 에 따로 둔다.\n' "$n_fplan"
+fi
+if [ -n "$plan" ] && [ -f "$plan" ]; then
   left=$(grep -cE '^[[:space:]]*[-*+][[:space:]]+\[[^xX]\]' "$plan" 2>/dev/null || printf '0')
   case "$left" in ''|*[!0-9]*) left=0 ;; esac
   if [ "$left" -gt 0 ]; then

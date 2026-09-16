@@ -5,8 +5,8 @@
 계획 → 승인 → 구현 → **문맥 없는 교차 리뷰** → 병합·기각 → 반영. 각 단계를 **훅이 집행**한다.
 
 ```
-/plan <요구사항>     계획을 세우고 .claude/plan-draft.md 로 남긴다
-/go   <범위>         초안을 승인 → plan-active.md (목표 계약 + 체크박스)
+/plan <요구사항>     계획을 세우고 .claude/plans/<slug>/draft.md 로 남긴다
+/go   <범위>         초안을 승인 → 같은 디렉토리의 plan.md (목표 계약 + 체크박스)
    … 구현 …          매 턴 목표 계약이 문맥에 재주입된다(드리프트 방지)
 /review-loop         리뷰어 3종 병렬 + 병합 에이전트가 검증·기각
    … 반영 …          확정 결함을 안 고치면 턴이 끝나지 않는다
@@ -119,7 +119,7 @@ git push
 
 | 남기는 것 | 왜 |
 |---|---|
-| `.claude/plan-active.md` · `.claude/review-active.md` | 진행 중인 계획·리뷰 상태 |
+| `.claude/plans/<slug>/{draft,plan,review}.md` (레거시 `plan-active.md` · `review-active.md`) | 진행 중인 계획·리뷰 상태 — 계획마다 디렉토리 하나 |
 | `.claude/review/runs/` | 라운드 원본(diff·리뷰어 JSON) |
 | `.claude/review/config.json` | 그 프로젝트의 리뷰 **구성**(preset·모델·split_lines) — **플러그인 기본을 이긴다** |
 | `.claude/review-rules.md` | 그 프로젝트의 리뷰 규칙(없으면 이번에 만들어라) |
@@ -170,11 +170,15 @@ git push
 게이트가 재려던 것은 「승인받은 계획을 완주했나」이고 **승인은 세션이 한 행위**다. 그래서 그
 행위의 흔적을 transcript 에서 본다. 어느 하나면 채택이다:
 
-- 사람 프롬프트의 go 호출 — `/go-review:go` · `/go` (원문·`<command-name>` 래핑 둘 다)
-- `Skill` 도구로 `go-review:go` · `go-review:review-loop` 호출
-- 그 파일을 **쓴** 도구 — `Write`/`Edit`/`MultiEdit`, 또는 Bash 의 `> <파일>` 재지향
+- 그 파일을 **쓴** 도구 — `Write`/`Edit`/`MultiEdit` (파일 경로가 그 계획 파일로 끝난다)
+- **레거시 단일 자리(`plan-active.md` 류)에만**: 사람 프롬프트의 go 호출(`/go-review:go` · `/go` ·
+  `<command-name>` 래핑) 또는 `Skill` 도구로 `go-review:go` · `go-review:review-loop` 호출 — 그 자리는
+  워크트리에 하나뿐이라 「go 를 불렀다」가 곧 「그 계획」이다. `plans/<slug>/` 계획은 여럿일 수 있어
+  go 호출로는 어느 것인지 모르므로 쓰기 흔적만 본다(2026-09-16 실증: 다른 세션의 `/go` 1회가
+  이 세션의 slug 계획을 잡았다 — 대조군 s-uq6·s-uq7)
 
-읽기(`cat`·`grep`)는 채택이 아니다 — 점검하는 세션이 딱 그것을 한다. `/go-review:plan` 도
+읽기(`cat`·`grep`)는 채택이 아니다 — 점검하는 세션이 딱 그것을 한다. Bash 의 `> <파일>` 재지향도
+채택이 아니다(게이트를 테스트하는 세션의 픽스처 문자열이 걸렸다 · `5b29ada`). `/go-review:plan` 도
 채택이 아니다(초안을 만드는 단계다). 판별 불가(transcript 부재·사람 발화 0)는 **차단 유지**다.
 
 남의 계획일 때는 막지 않되 **세션당 한 번** 그 사실을 알린다. 조용한 통과와 검사한 통과는 다르다.
@@ -186,6 +190,29 @@ git push
 
 ⭐ 그래서 `/go` 는 계획 머리말에 **`작업 위치` 를 항상 쓴다.** 그 줄이 없으면 게이트는
 판별할 수 없어 진단 없이 차단만 한다(모르는 것을 근거로 게이트를 열지 않는다).
+
+### ⭐⭐ 2026-09-16 — 계획마다 디렉토리 하나 (`.claude/plans/<slug>/`)
+
+채택 판별이 있어도 파일이 **하나**면 두 세션의 계획은 같은 자리를 다툰다(한쪽의 `/go` 가 남의
+`plan-draft.md` 를 옮기려 든다). 그래서 자리를 나눴다 — 사용자 지시 「확실히 보장이 필요해. 다른
+세션의 플랜과 이 세션의 플랜이 겹치지 않는 것이 필요해」.
+
+| 무엇 | 어디 | 누가 고른다 |
+|---|---|---|
+| 초안 | `.claude/plans/<slug>/draft.md` | `go-precheck.sh` — **이 세션이 쓴** 초안만(`draft_pick`) · 남의 것만 있으면 「옮기지 마라」 |
+| 계획 | `.claude/plans/<slug>/plan.md` | 게이트·재주입·사전 확인 공통 `plan_pick` — 후보(env → `plans/*/plan.md` → 레거시) 가운데 이 세션이 채택한 첫 것 |
+| 리뷰 | `.claude/plans/<slug>/review.md` | `review-gate.sh` — 고른 계획 옆(`review_of`) |
+
+slug 는 `YYYYMMDD-<제목 kebab>`. 레거시 자리(`plan-active.md`·`plan-draft.md`·`review-active.md`)는
+그대로 인식된다. `CLAUDE_PLAN_FILE`·`CLAUDE_PLAN_DRAFT_FILE`·`CLAUDE_REVIEW_FILE` 은 후보를 그 파일
+하나로 좁히지만 **채택 판별을 건너뛰지는 않는다**(대조군: 좁힌 파일이 남의 것이면 알림).
+go-tester 는 계획을 `CLAUDE_PLAN_FILE` 로 받으므로 `/go` 가 옵트인 때 그 경로를 넘긴다(`go.md` §0-d).
+
+실증(2026-09-16 · 같은 워크트리의 실제 transcript 둘): 이 세션의 기록으로 돌리면 이 세션의 slug
+계획만 막고 다른 세션의 `plan-active.md` 는 문구에 없다 · 다른 세션의 기록으로 돌리면 그 반대 ·
+재주입도 각자의 목표 계약만 · `/go` 사전 확인도 각자의 계획을 「기존 계획」으로 지목한다.
+「세션별 파일은 만들 수 없다(2026-09-02)」는 안내는 폐기됐다 — 그때는 세션 번호가 필요했고,
+지금은 행위 흔적으로 가르므로 이름만 고유하면 된다.
 
 ## 프로젝트별 규칙 — `.claude/review-rules.md`
 
@@ -301,7 +328,7 @@ bash review/eval/eval.sh score review/eval/cases/universal.jsonl runs/cx-1 codex
 | `go-precheck.sh` | UserPromptSubmit | 초안 없는 `/go` | 경고 |
 | `goal-echo.sh` | UserPromptSubmit | 목표 계약 재주입 | — |
 | `todo-completion-gate.sh` | Stop | 계획 미완료(**도구 축** — 마지막 `TodoWrite`) | **차단** |
-| `plan-file-gate.sh` | Stop | 계획 미완료(**파일 축** — `plan-active.md`) | **차단** |
+| `plan-file-gate.sh` | Stop | 계획 미완료(**파일 축** — 이 세션이 채택한 `plans/<slug>/plan.md` · 레거시) | **차단** |
 | `review-gate.sh` | Stop | 확정 결함 미해결 | **차단** |
 
 ⭐ **완주 축이 둘인 이유**: `TodoWrite` 도구가 **하네스 빌드에 아예 없는 세션**이 있다. 그때

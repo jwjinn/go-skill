@@ -57,15 +57,17 @@ plan_other_worktrees() {
   printf '%s\n' "$list" | sed -n 's/^worktree //p' | while IFS= read -r dir; do
     [ -n "$dir" ] || continue
     [ "$dir" = "$root" ] && continue
-    f="$dir/.claude/plan-active.md"
-    [ -f "$f" ] || continue
-    left=$(grep -cE '^[[:space:]]*[-*+][[:space:]]+\[[^xX]\]' "$f" 2>/dev/null || printf '0')
-    case "$left" in ''|*[!0-9]*) left=0 ;; esac
-    # ⚠ 미완료 0 인 계획은 **알리지 않는다**(2026-09-03 리뷰가 지목). 다 닫힌 지난주 잔재까지
-    #   「다른 워크트리에 계획이 있다」로 말하면 그 문장이 거짓이고, 호출부가 그것 때문에
-    #   「승인할 계획이 없다」 안내를 삼킨다.
-    [ "$left" -gt 0 ] || continue
-    printf '%s|%s\n' "$f" "$left"
+    # ⭐ 고유화(2026-09-16) — 레거시 한 자리와 `plans/*/plan.md` 를 다 본다
+    for f in "$dir/.claude/plan-active.md" "$dir"/.claude/plans/*/plan.md; do
+      [ -f "$f" ] || continue
+      left=$(grep -cE '^[[:space:]]*[-*+][[:space:]]+\[[^xX]\]' "$f" 2>/dev/null || printf '0')
+      case "$left" in ''|*[!0-9]*) left=0 ;; esac
+      # ⚠ 미완료 0 인 계획은 **알리지 않는다**(2026-09-03 리뷰가 지목). 다 닫힌 지난주 잔재까지
+      #   「다른 워크트리에 계획이 있다」로 말하면 그 문장이 거짓이고, 호출부가 그것 때문에
+      #   「승인할 계획이 없다」 안내를 삼킨다.
+      [ "$left" -gt 0 ] || continue
+      printf '%s|%s\n' "$f" "$left"
+    done
   done
 }
 
@@ -187,14 +189,20 @@ plan_session_claims() {   # <transcript> <파일 basename …>
                | test("<command-name>/go(-review:go|-review:review-loop)?</command-name>")
                  or test("(^|\n)[[:space:]]*/go(-review:go|-review:review-loop)?([[:space:]]|$)"));
     def names: ($names | split(" "));
+    # ⭐⭐ 고유화(2026-09-16 실증이 잡았다) — 「/go 를 불렀다」·「Skill go-review:go 를 썼다」는 흔적은
+    #   **레거시 단일 자리**(이름에 / 가 없는 plan-active.md 류)에만 채택이다. 그 자리는 워크트리에 하나라
+    #   go 호출 = 그 계획이지만, `plans/<slug>/plan.md` 는 여럿이라 go 호출로는 어느 것인지 모른다.
+    #   실측: 다른 세션(genOS · /go 1회)의 기록으로 돌리자 이 세션의 slug 계획이 첫 후보라서 잡혔다.
+    #   slug 계획은 Write/Edit/MultiEdit 흔적으로만 채택된다(/go 가 초안을 plan.md 로 옮길 때 Write 를 쓴다).
+    def legacy_asked: (names | any(contains("/") | not));
     def hits_name($p): (names | any(. as $n | ($p == $n) or ($p | endswith("/" + $n))));
     def claims_tool: (.type=="assistant" and any(.message.content[]?;
         .type=="tool_use" and (
-          (.name=="Skill" and ((.input.skill // "") | test("^go-review:(go|review-loop)$")))
+          (legacy_asked and .name=="Skill" and ((.input.skill // "") | test("^go-review:(go|review-loop)$")))
           or ((.name=="Write" or .name=="Edit" or .name=="MultiEdit") and hits_name(.input.file_path // ""))
         )));
     fromjson?
-    | if (human and go_call) or claims_tool then "yes"
+    | if (human and go_call and legacy_asked) or claims_tool then "yes"
       elif human then "human"
       else empty end
   ' "$_sc_tr" 2>/dev/null | sort -u | tr '\n' ' ')
@@ -203,4 +211,106 @@ plan_session_claims() {   # <transcript> <파일 basename …>
     *" human "*) return 1 ;;
     *)           return 2 ;;
   esac
+}
+
+# ── 계획 파일 고유화 — 계획마다 디렉토리 하나 (2026-09-16) ──────────────────────
+#
+# ⭐⭐ 왜: 계획 상태가 워크트리마다 **고정 경로 넷**(plan-draft·plan-active·review-active·tester/opt-in)에
+#   살아서, 같은 워크트리에서 세션이 둘이면 그대로 겹쳤다. 2026-09-02 에 세션별 파일로 나누려다
+#   되돌린 이유는 「모델이 자기 session_id 를 알 수 없다」였다. 오늘 만든 채택 판별
+#   (`plan_session_claims`)은 세션 번호가 아니라 **행위 흔적**으로 소유를 가르므로, 파일 이름만
+#   고유하면 그 흔적도 고유해진다. 사용자 지시(2026-09-16): 「확실히 보장이 필요해. 다른 세션의
+#   플랜과 이 세션의 플랜이 겹치지 않는 것이 필요해.」
+#
+# 규약:
+#   정본   : <base>/plans/<slug>/{draft.md,plan.md,review.md}   ← 계획 하나 = 디렉토리 하나
+#   레거시 : <base>/plan-draft.md · plan-active.md · review-active.md ← 단일 계획 자리. 그대로 인식한다
+#   덮어쓰기: CLAUDE_PLAN_FILE · CLAUDE_PLAN_DRAFT_FILE · CLAUDE_REVIEW_FILE 이 있으면 **그것 하나만**
+#   slug   : YYYYMMDD-<제목 kebab>(한글 허용 · 공백→- · 짧게). /plan 이 정한다. 여기서는 글롭만 한다.
+#
+# ⚠ 「채택」의 판정은 이 파일 위의 `plan_session_claims` 하나다 — 여기서 다시 정의하지 않는다.
+#   후보의 이름을 그 함수에 맞게 만들어 넘기는 것(`plan_claim_name`)이 이 절의 일이다.
+
+# plan_candidates <base> — 계획 파일 후보를 줄마다. 우선순위: env 하나 → plans/*/plan.md → 레거시
+plan_candidates() {
+  if [ -n "${CLAUDE_PLAN_FILE:-}" ]; then printf '%s\n' "$CLAUDE_PLAN_FILE"; return 0; fi
+  _pc_d="$1"
+  for _pc_f in "$_pc_d"/plans/*/plan.md; do [ -f "$_pc_f" ] && printf '%s\n' "$_pc_f"; done
+  [ -f "$_pc_d/plan-active.md" ] && printf '%s\n' "$_pc_d/plan-active.md"
+  return 0
+}
+
+# draft_candidates <base> — 초안 후보를 줄마다. 우선순위 같음
+draft_candidates() {
+  if [ -n "${CLAUDE_PLAN_DRAFT_FILE:-}" ]; then printf '%s\n' "$CLAUDE_PLAN_DRAFT_FILE"; return 0; fi
+  _dc_d="$1"
+  for _dc_f in "$_dc_d"/plans/*/draft.md; do [ -f "$_dc_f" ] && printf '%s\n' "$_dc_f"; done
+  [ -f "$_dc_d/plan-draft.md" ] && printf '%s\n' "$_dc_d/plan-draft.md"
+  return 0
+}
+
+# review_of <plan 경로> <base> — 그 계획의 리뷰 파일 경로(존재 여부 무관). env 가 있으면 그것.
+review_of() {
+  if [ -n "${CLAUDE_REVIEW_FILE:-}" ]; then printf '%s' "$CLAUDE_REVIEW_FILE"; return 0; fi
+  case "$1" in
+    */plans/*/plan.md) printf '%s' "${1%/plan.md}/review.md" ;;
+    *)                 printf '%s' "$2/review-active.md" ;;
+  esac
+}
+
+# plan_claim_name <파일> — `plan_session_claims` 에 넘길 이름. plans/<slug>/x.md 는 그 셋을 통째로
+#   (basename 만 넘기면 모든 계획의 plan.md 가 같아진다 — 고유화의 의미가 사라진다).
+plan_claim_name() {
+  case "$1" in
+    */plans/*/*.md) _cn="${1%/*}"; _cn="${_cn##*/plans/}"; printf 'plans/%s/%s' "$_cn" "${1##*/}" ;;
+    *)              printf '%s' "${1##*/}" ;;
+  esac
+}
+
+# plan_pick <base> <transcript> — 후보 가운데 **미완료가 있고 이 세션이 채택한** 첫 계획을 stdout 에.
+#   채택 = claims rc 0, 또는 rc 2(판별 불가 → 모르는 것으로 게이트를 열지 않는다).
+#   남의 것(rc 1)은 stderr 에 `foreign:<경로>|<미완료>` 로 낸다 — 호출부가 알림에 쓴다.
+#   반환: 0 하나 골랐다 · 1 채택한 것 없음(남의 것만이거나 후보 없음)
+plan_pick() {
+  _pp_base="$1"; _pp_tr="$2"; _pp_picked=''
+  while IFS= read -r _pp_f; do
+    [ -n "$_pp_f" ] && [ -f "$_pp_f" ] || continue
+    if command -v plan_boxes_excluding_decisions >/dev/null 2>&1; then
+      _pp_all=$(plan_boxes_excluding_decisions "$_pp_f" all); _pp_done=$(plan_boxes_excluding_decisions "$_pp_f" done)
+    else
+      _pp_all=$(grep -cE '^[[:space:]]*[-*+][[:space:]]+\[.\]' "$_pp_f" 2>/dev/null || printf '0')
+      _pp_done=$(grep -cE '^[[:space:]]*[-*+][[:space:]]+\[[xX]\]' "$_pp_f" 2>/dev/null || printf '0')
+    fi
+    case "$_pp_all"  in ''|*[!0-9]*) _pp_all=0 ;; esac
+    case "$_pp_done" in ''|*[!0-9]*) _pp_done=0 ;; esac
+    _pp_left=$((_pp_all - _pp_done))
+    # ⚠ 체크박스 0개 파일은 **후보에 남긴다** — 호출부가 「판정 불가」 경고를 내야 한다(탐지기를 먼저 의심하라).
+    #   전부 닫힌 파일(박스>0 · 남음 0)만 건너뛴다.
+    [ "$_pp_all" -eq 0 ] || [ "$_pp_left" -gt 0 ] || continue
+    # ⚠ CLAUDE_PLAN_FILE 도 채택 검사를 거친다 — 환경은 **어느 파일**만 좁히고 「이 세션의 것인가」는 흔적이 말한다
+    #   (종전 동작이고 대조군이 그 계약을 잠근다 · 첫 판에 환경을 무조건 채택으로 두었다가 13건이 붉어졌다).
+    plan_session_claims "$_pp_tr" "$(plan_claim_name "$_pp_f")"; _pp_rc=$?
+    if [ "$_pp_rc" -ne 1 ]; then _pp_picked="$_pp_f"; break; fi
+    printf 'foreign:%s|%s\n' "$_pp_f" "$_pp_left" >&2
+  done <<EOF
+$(plan_candidates "$_pp_base")
+EOF
+  [ -n "$_pp_picked" ] || return 1
+  printf '%s' "$_pp_picked"
+}
+
+# draft_pick <base> <transcript> — 초안 후보 가운데 **이 세션이 쓴** 첫 것. 없으면 rc 1 · 남의 것은 stderr.
+#   ⚠ 초안은 미완료 수를 보지 않는다(초안은 다 미완료다). 판별 불가(rc 2)도 채택으로 본다.
+draft_pick() {
+  _dp_base="$1"; _dp_tr="$2"; _dp_picked=''
+  while IFS= read -r _dp_f; do
+    [ -n "$_dp_f" ] && [ -f "$_dp_f" ] || continue
+    plan_session_claims "$_dp_tr" "$(plan_claim_name "$_dp_f")"; _dp_rc=$?
+    if [ "$_dp_rc" -ne 1 ]; then _dp_picked="$_dp_f"; break; fi
+    printf 'foreign:%s\n' "$_dp_f" >&2
+  done <<EOF
+$(draft_candidates "$_dp_base")
+EOF
+  [ -n "$_dp_picked" ] || return 1
+  printf '%s' "$_dp_picked"
 }

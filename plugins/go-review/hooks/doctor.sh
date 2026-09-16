@@ -103,34 +103,44 @@ else
 fi
 
 # ── ⑤ 계획 파일의 소유자가 이 워크트리인가 ──────────────────────────────────
+# ⭐ 고유화(2026-09-16) — 계획은 여럿일 수 있다(`plans/*/plan.md` + 레거시). 전부 세고 소유자를 본다.
 . "$SELF/_planpath.sh" 2>/dev/null || true
-plan="${CLAUDE_PLAN_FILE:-$ROOT/.claude/plan-active.md}"
-if [ ! -f "$plan" ]; then
-  pass "활성 계획 없음(완주 게이트는 계획이 생기면 무장된다)"
-else
+n_plan=0; n_left=0; bad_owner=''
+while IFS= read -r plan; do
+  [ -n "$plan" ] && [ -f "$plan" ] || continue
+  n_plan=$((n_plan+1))
   left=$(grep -cE '^[[:space:]]*[-*+][[:space:]]+\[[^xX]\]' "$plan" 2>/dev/null || printf '0')
   case "$left" in ''|*[!0-9]*) left=0 ;; esac
+  n_left=$((n_left+left))
   owner=''
   command -v plan_owner_of >/dev/null 2>&1 && owner=$(plan_owner_of "$plan")
-  if [ -n "$owner" ] && [ "$owner" != "$ROOT" ]; then
-    fails "활성 계획의 작업 위치가 다르다($owner ≠ $ROOT) — 남의 계획일 수 있고, 그 상태에서는 이 세션의 완주 게이트가 남의 것을 본다"
-  else
-    pass "활성 계획 소유자 일치 · 미완료 ${left}개"
-  fi
+  [ -n "$owner" ] && [ "$owner" != "$ROOT" ] && bad_owner="$bad_owner ${plan##*/.claude/}($owner)"
+done <<EOF
+$(command -v plan_candidates >/dev/null 2>&1 && plan_candidates "$ROOT/.claude")
+EOF
+if [ "$n_plan" -eq 0 ]; then
+  pass "활성 계획 없음(완주 게이트는 계획이 생기면 무장된다)"
+elif [ -n "$bad_owner" ]; then
+  fails "계획의 작업 위치가 다르다:${bad_owner} — 남의 계획일 수 있다. 게이트는 이 세션이 채택한 것만 막지만 소유자 불일치는 알아야 한다"
+else
+  pass "계획 ${n_plan}개 · 소유자 일치 · 미완료 ${n_left}개(게이트는 이 세션이 채택한 것만 막는다)"
 fi
 
 # ── ⑥ 미해결 리뷰가 남아 있나 ───────────────────────────────────────────────
-rev="${CLAUDE_REVIEW_FILE:-$ROOT/.claude/review-active.md}"
-if [ -f "$rev" ]; then
-  rleft=$(grep -cE '^[[:space:]]*[-*+][[:space:]]+\[[^xX]\]' "$rev" 2>/dev/null || printf '0')
-  case "$rleft" in ''|*[!0-9]*) rleft=0 ;; esac
-  if [ "$rleft" -gt 0 ]; then
-    warns "미해결 리뷰 지적 ${rleft}건이 남아 있다($rev) — 이번 세션이 그것부터 닫아야 할 수 있다"
-  else
-    pass "리뷰 반영 파일 있음 · 미해결 0(닫고 지워도 된다)"
-  fi
-else
+n_rev=0; r_left=0
+for rev in ${CLAUDE_REVIEW_FILE:-} "$ROOT"/.claude/plans/*/review.md "$ROOT/.claude/review-active.md"; do
+  [ -n "$rev" ] && [ -f "$rev" ] || continue
+  n_rev=$((n_rev+1))
+  rl=$(grep -cE '^[[:space:]]*[-*+][[:space:]]+\[[^xX]\]' "$rev" 2>/dev/null || printf '0')
+  case "$rl" in ''|*[!0-9]*) rl=0 ;; esac
+  r_left=$((r_left+rl))
+done
+if [ "$n_rev" -eq 0 ]; then
   pass "미해결 리뷰 없음"
+elif [ "$r_left" -gt 0 ]; then
+  warns "미해결 리뷰 지적 ${r_left}건(파일 ${n_rev}개) — 이번 세션이 그것부터 닫아야 할 수 있다"
+else
+  pass "리뷰 반영 파일 ${n_rev}개 · 미해결 0(닫고 지워도 된다)"
 fi
 
 # ── ⑦ 게이트 테스트가 최근에 통과했나 ───────────────────────────────────────

@@ -190,6 +190,22 @@ pyplain "$T/tr.jsonl" "$((NOW - 3600))"
 o=$(printf '{"session_id":"%s","transcript_path":"%s/tr.jsonl"}' "$SESS" "$T" | CLAUDE_PROJECT_DIR="$T" bash "$SAB" 2>/dev/null)
 expect "⭐ 사보타주(채택 판별 제거) → 남의 리뷰를 막는다" BLOCK "$o"; cleanup; rm -f "$SAB"
 
+echo "=== ⑨ ⭐⭐ 고유화 — 리뷰 파일은 계획 옆(plans/<slug>/review.md) (2026-09-16)"
+setup s30; mkdir -p "$T/.claude/plans/20260916-a" "$T/.claude/plans/20260916-b"
+printf '# p\n- [ ] 할일\n' > "$T/.claude/plans/20260916-a/plan.md"
+printf '# r\n- [ ] A 의 미해결\n' > "$T/.claude/plans/20260916-a/review.md"; setmtime "$T/.claude/plans/20260916-a/review.md" "$NOW"
+printf '# r\n- [ ] B 의 미해결\n' > "$T/.claude/plans/20260916-b/review.md"; setmtime "$T/.claude/plans/20260916-b/review.md" "$NOW"
+{ python3 -c 'import json;print(json.dumps({"type":"user","timestamp":"2000-01-01T00:00:00Z","message":{"content":"해줘"}}))'
+  python3 -c "import json;print(json.dumps({'type':'assistant','message':{'content':[{'type':'tool_use','name':'Write','input':{'file_path':'$T/.claude/plans/20260916-a/plan.md','content':'x'}}]}}))"
+} > "$T/tr.jsonl"
+o=$(run); expect "A 계획을 채택한 세션 → A 의 리뷰만 차단" BLOCK "$o"
+printf '%s' "$o" | grep -q 'B 의 미해결' && ng "B 의 리뷰가 섞였다" BLOCK "$o" || ok "⭐ B 의 리뷰는 문구에 없다" "-"
+cleanup
+setup s31; mkdir -p "$T/.claude/plans/20260916-b"
+printf '# r\n- [ ] B 의 미해결\n' > "$T/.claude/plans/20260916-b/review.md"; setmtime "$T/.claude/plans/20260916-b/review.md" "$NOW"
+pyplain "$T/tr.jsonl" "$((NOW - 3600))"
+expect "채택한 계획도 리뷰도 없는 세션 → 남의 plans/ 리뷰는 막지 않는다" PASS "$(run)"; cleanup
+
 echo "=== ⑦ 사보타주 — 탐지기가 정말 그 조건을 보는가"
 # 미해결 줄을 [x] 로 바꾸면 통과해야 한다. 안 그러면 이 테스트는 다른 이유로 BLOCK 을 보고 있다.
 setup s17; printf '# r\n- [ ] 미해결\n' > "$T/.claude/review-active.md"; setmtime "$T/.claude/review-active.md" "$NOW"

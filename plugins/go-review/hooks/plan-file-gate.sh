@@ -62,16 +62,31 @@ transcript=$(printf '%s' "$input" | jq -r '.transcript_path // ""' 2>/dev/null) 
 #   같은 문제의 정답은 이미 있다 — **워크트리로 디렉토리를 나눠라**(CLAUDE_PROJECT_DIR 가
 #   달라지므로 계획 파일도 자연히 분리된다). 한 트리를 고집해야 하면 `CLAUDE_PLAN_FILE` 로
 #   나눠라. `/go` 가 착수 전에 이 충돌을 감지해 사용자에게 말한다.
-if [ -n "${CLAUDE_PLAN_FILE:-}" ]; then
-  plan="$CLAUDE_PLAN_FILE"
-elif [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
-  plan="$CLAUDE_PROJECT_DIR/.claude/plan-active.md"
-else
-  # ⚠ 플러그인으로 배포되면 `dirname $0/..` 는 **플러그인 디렉토리**(코드)를 가리킨다.
-  #   상태(계획·리뷰 파일)는 언제나 **프로젝트**의 .claude/ 에 있어야 하므로 cwd 로 폴백한다.
-  plan="${PWD}/.claude/plan-active.md"
+# ── ⭐⭐ 고유화(2026-09-16) — 계획은 여럿일 수 있고, 이 세션이 **채택한 것**만 본다 ─────────
+# 후보 = CLAUDE_PLAN_FILE 하나 | `.claude/plans/*/plan.md` | 레거시 `plan-active.md`.
+# `plan_pick` 이 미완료가 있고 채택(rc 0 · 판별불가 2)인 첫 계획을 고른다. 남의 것(rc 1)만 있으면
+# 차단하지 않고 **세션당 한 번** 알린다 — 조용한 통과와 검사한 통과는 다르다.
+# 사용자 지시: 「확실히 보장이 필요해. 다른 세션의 플랜과 이 세션의 플랜이 겹치지 않는 것」
+. "$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/_planpath.sh" 2>/dev/null || exit 0
+base=$(plan_base) || exit 0
+foreign_err="${TMPDIR:-/tmp}/claude-plan-pick-${session}.$$"
+plan=$(plan_pick "$base" "$transcript" 2>"$foreign_err") || plan=''
+if [ -z "$plan" ]; then
+  n_foreign=$(grep -c '^foreign:' "$foreign_err" 2>/dev/null || printf '0')
+  case "$n_foreign" in ''|*[!0-9]*) n_foreign=0 ;; esac
+  if [ "$n_foreign" -gt 0 ]; then
+    once="${TMPDIR:-/tmp}/claude-plan-foreign-${session}"
+    if [ ! -f "$once" ]; then
+      : > "$once" 2>/dev/null
+      flist=$(sed -n 's/^foreign:\(.*\)|\(.*\)$/\1 (미완료 \2)/p' "$foreign_err" | head -5 | tr '\n' ' ')
+      jq -n --arg n "$n_foreign" --arg l "$flist" \
+        '{systemMessage: ("ℹ 이 워크트리에 미완료 계획 " + $n + "개가 있지만 **이 세션의 것이 아니다**: " + $l + "— 이 세션은 go-review:go 를 부르지도 그 파일을 쓰지도 않았으므로 완주 게이트가 막지 않는다. 이어가려면 `go-review:go` 로 채택해라(§0-b 경로 ①). 이 알림은 세션당 한 번이다.")}' 2>/dev/null
+    fi
+  fi
+  rm -f "$foreign_err"; exit 0
 fi
-[ -f "$plan" ] || exit 0   # 계획 파일이 없는 턴 → 관여하지 않는다
+rm -f "$foreign_err"
+[ -f "$plan" ] || exit 0
 
 # ── 체크박스 파싱 ────────────────────────────────────────────────────────────
 # `- [ ] 할 일` / `* [x] 한 일` / 들여쓴 하위 항목도 센다.
@@ -158,19 +173,7 @@ fi
 # ⚠ 판별 불가(rc 2)는 **차단 유지**다 — 모르는 것을 근거로 게이트를 열지 않는다.
 # ⚠ 남의 것이면 차단하지 않되 **침묵하지도 않는다** — 세션당 한 번 알린다(조용한 통과와
 #   검사한 통과를 같은 것으로 읽지 않게).
-claim_rc=0
-if command -v plan_session_claims >/dev/null 2>&1; then
-  plan_session_claims "$transcript" "$(basename "$plan")"; claim_rc=$?
-fi
-if [ "$claim_rc" -eq 1 ]; then
-  once="${TMPDIR:-/tmp}/claude-plan-foreign-${session}"
-  if [ ! -f "$once" ]; then
-    : > "$once" 2>/dev/null
-    jq -n --arg p "$plan" --arg n "$left" \
-      '{systemMessage: ("ℹ 이 워크트리에 미완료 " + $n + "개짜리 계획이 있지만 **이 세션의 것이 아니다**(" + $p + "). 이 세션은 go-review:go 를 부르지도 그 파일을 쓰지도 않았으므로 완주 게이트가 막지 않는다 — 그 계획을 이어가려면 `go-review:go` 로 채택해라(§0-b 경로 ①). 이 알림은 세션당 한 번이다.")}' 2>/dev/null
-  fi
-  exit 0
-fi
+# (채택 판별은 위 `plan_pick` 이 이미 했다 — 여기 도달한 계획은 이 세션의 것이거나 판별 불가다)
 
 # ── 무한루프 방지 ①: 세션당 차단 횟수 상한 ──────────────────────────────────
 max=${CLAUDE_PLAN_GATE_MAX:-8}

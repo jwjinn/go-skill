@@ -335,6 +335,28 @@ tester_unstub
 printf '%s' "$out" | grep -q '다른 계획' && ok "다른 계획의 옵트인을 지목한다" || ng "잔재 미지목" "$out"
 cleanup
 
+echo "=== ⭐⭐ 고유화 — 초안·계획이 여럿이면 내 것만 채택 후보다 (2026-09-16)"
+runtr(){ python3 -c "import json,sys;print(json.dumps({'prompt':sys.argv[1],'transcript_path':sys.argv[2]}))" "$1" "$2" \
+         | CLAUDE_PROJECT_DIR="$T" bash "$HOOK" 2>/dev/null; }
+setup; mkdir -p "$T/.claude/plans/20260916-mine" "$T/.claude/plans/20260916-theirs"
+printf '%s' "$DRAFT" > "$T/.claude/plans/20260916-mine/draft.md";   setmtime "$T/.claude/plans/20260916-mine/draft.md" "$NOW"
+printf '%s' "$DRAFT" > "$T/.claude/plans/20260916-theirs/draft.md"; setmtime "$T/.claude/plans/20260916-theirs/draft.md" "$NOW"
+printf '%s\n' '{"type":"user","message":{"content":"해줘"}}' "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"$T/.claude/plans/20260916-mine/draft.md\",\"content\":\"x\"}}]}}" > "$T/tr-mine.jsonl"
+out=$(runtr "/go" "$T/tr-mine.jsonl")
+printf '%s' "$out" | grep -q '20260916-mine/plan.md' && ok "내 초안 → 그 디렉토리의 plan.md 로 옮겨라" || ng "내 초안 이관 안내" "$out"
+printf '%s' "$out" | grep -q '20260916-theirs' && ng "남의 초안이 섞였다" "$out" || ok "⭐ 남의 초안은 안내에 없다"
+printf '%s\n' '{"type":"user","message":{"content":"해줘"}}' > "$T/tr-none.jsonl"
+out=$(runtr "/go" "$T/tr-none.jsonl")
+printf '%s' "$out" | grep -q '다른 세션의 초안 2개' && ok "내 초안이 없고 남의 것만 → 「옮기지 마라」(개수 2)" || ng "남의 초안 경고" "$out"
+printf '%s' "$out" | grep -q '그대로.*옮겨라' && ng "남의 초안을 옮기라고 했다" "$out" || ok "⭐ 옮기라는 안내가 없다"
+# 경로 ① — plans/ 의 계획을 채택한 세션
+rm -f "$T/.claude/plans/20260916-mine/draft.md" "$T/.claude/plans/20260916-theirs/draft.md"
+printf -- '# 계획\n\n작업 위치: %s\n\n## 목표 계약\n원 요청: "x"\n\n## R — 리뷰\n- [ ] R1\n' "$T" > "$T/.claude/plans/20260916-mine/plan.md"
+printf '%s\n' '{"type":"user","message":{"content":"해줘"}}' "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"$T/.claude/plans/20260916-mine/plan.md\",\"content\":\"x\"}}]}}" > "$T/tr-plan.jsonl"
+out=$(runtr "/go" "$T/tr-plan.jsonl")
+printf '%s' "$out" | grep -q '기존 계획.*20260916-mine/plan.md' && ok "plans/ 의 내 계획 → 경로 ①(채택)" || ng "plans 경로 ①" "$out"
+cleanup
+
 echo "=== ⭐⭐ 형제 플러그인 탐색 — 설치 모양 둘을 다 찾는다 (2026-09-16)"
 # 고정 문자열 `~/.claude/skills/go-tester` 는 심링크 설치에만 있다. 마켓플레이스로 받으면
 # `…/cache/<마켓>/go-tester/<버전>/` 이고, 그 경로를 못 찾으면 위임이 조용히 rc 70 으로 닫힌다.

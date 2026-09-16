@@ -2,6 +2,7 @@
 .claude/plan-active.md
 .claude/plan-draft.md
 .claude/review-active.md
+.claude/plans/
 plugins/go-review/review/runs/
 plugins/go-review/review/eval/runs/
 __pycache__/

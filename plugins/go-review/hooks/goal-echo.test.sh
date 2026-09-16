@@ -195,6 +195,19 @@ printf '%s\n' '{"type":"user","message":{"content":"<command-name>/go-review:pla
 out=$(runtr "계속" "$T/plan.jsonl"); [ -z "$out" ] && ok "대조군: /go-review:plan 은 채택이 아니다" || ng "plan 호출" "$out"
 cleanup
 
+echo "=== ⭐⭐ 고유화 — 후보 여럿 중 내가 채택한 계약만 되읽는다 (2026-09-16)"
+setup s30; mkdir -p "$T/.claude/plans/20260916-a" "$T/.claude/plans/20260916-b"
+printf '# A\n\n## 목표 계약\n원 요청: "A 의 요청"\n범위 밖: 없음\n\n## P0\n- [ ] a\n' > "$T/.claude/plans/20260916-a/plan.md"; setmtime "$T/.claude/plans/20260916-a/plan.md" "$NOW"
+printf '# B\n\n## 목표 계약\n원 요청: "B 의 요청"\n범위 밖: 없음\n\n## P0\n- [ ] b\n' > "$T/.claude/plans/20260916-b/plan.md"; setmtime "$T/.claude/plans/20260916-b/plan.md" "$NOW"
+printf '%s\n' '{"type":"user","message":{"content":"해줘"}}' "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"$T/.claude/plans/20260916-b/plan.md\",\"content\":\"x\"}}]}}" > "$T/tr-b.jsonl"
+out=$(runtr "계속" "$T/tr-b.jsonl")
+printf '%s' "$out" | grep -q 'B 의 요청' && ok "B 를 쓴 세션 → B 의 계약을 되읽는다" || ng "B 미되읽음" "$out"
+printf '%s' "$out" | grep -q 'A 의 요청' && ng "A 의 계약이 섞였다" "$out" || ok "⭐ A 의 계약은 되읽지 않는다"
+printf '%s\n' '{"type":"user","message":{"content":"해줘"}}' > "$T/tr-none.jsonl"
+out=$(runtr "<command-name>/go-review:go</command-name>" "$T/tr-none.jsonl")
+[ -z "$out" ] && ok "go 호출인데 미채택 후보가 둘 → 어느 것인지 몰라 되읽지 않는다" || ng "둘 중 하나를 골랐다" "$out"
+cleanup
+
 echo "=== 사보타주 — 탐지기가 정말 미완료를 보는가"
 setup s9; printf '%s' "$PLAN_OK" > "$T/.claude/plan-active.md"; setmtime "$T/.claude/plan-active.md" "$NOW"
 a=$(run); cleanup
