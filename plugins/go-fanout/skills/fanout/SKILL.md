@@ -500,11 +500,12 @@ orca orchestration check --ack --json
 `coordinator-inbox-gate.sh` — 안 읽은 `worker_done`·`escalation` 이나 답 없는 `question` 이 하나라도 있으면 **턴 종료를 거부**한다(이 세션이 관여한 run 만 · 2026-09-16 에 `worker-question-gate.sh` 에서 개명하며 축이 셋이 됐다).
 
 **훅 본체는 이 플러그인에 있고 설치가 곧 등록이다** — `hooks/coordinator-inbox-gate.sh`
-(대조군 `hooks/coordinator-inbox-gate.test.sh` · **50검사**). `hooks/hooks.json` 이 Stop 에
+(대조군 `hooks/coordinator-inbox-gate.test.sh` — 검사 수는 그 출력의 마지막 줄이 정본이다).
+`hooks/hooks.json` 이 Stop 에
 붙이므로 프로젝트마다 손으로 넣을 것이 없다.
 
 ```bash
-bash "$GF/hooks/coordinator-inbox-gate.test.sh" # 50검사 초록 확인
+bash "$GF/hooks/coordinator-inbox-gate.test.sh" # 마지막 줄이 「실패 0」인지 본다
 ```
 
 ⛔⛔ **프로젝트로 복사하지 마라.** 2026-09-16 포장 전에는 이 절이 「복사해 설치한다」였고,

@@ -118,7 +118,9 @@ eq "모르는 인자면 rc 2"             "$(run --엉뚱)" 2
 
 echo "== t11. ⭐ --wait-read 가 읽음 여부를 출력에 적는다 =="
 mk_inbox 60
-printf '{"result":{"messages":[{"id":"msg_a1","type":"status","thread_id":"msg_q1","read":1}]}}\n' > "$SB/inbox-read.json"
+# ⚠ 답 메시지는 `to_handle` 이 `dispatch:` 로 시작한다 — 그것이 「코디네이터가 워커에게 보낸
+#   답」의 표식이다. 원 질문(id == thread_id)과 구분하는 축이라 픽스처도 실제 모양이어야 한다.
+printf '{"result":{"messages":[{"id":"msg_q1","type":"question","thread_id":"msg_q1","read":1},{"id":"msg_a1","type":"status","thread_id":"msg_q1","to_handle":"dispatch:ctx_aaa","read":1}]}}\n' > "$SB/inbox-read.json"
 cat > "$SB/bin/orca" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >> "$SB/argv"
@@ -132,6 +134,30 @@ EOF
 chmod +x "$SB/bin/orca"; : > "$SB/argv"; rm -f "$SB/flip"
 run --reply msg_q1 --body "답" --wait-read 6 >/dev/null
 grep -q 'read:true' "$SB/out" && ok "읽히면 read:true" || bad "read 상태가 틀리다 ($(cat "$SB/out"))"
+
+echo "== t13. ⛔ 원 질문만 read 인 인박스를 「답이 읽혔다」로 읽지 않는다 =="
+# 코디네이터가 게이트 지시대로 check 로 인박스를 소비하면 원 질문이 read=1 이 된다.
+# 그것을 답으로 세면 워커가 답을 못 받았는데 「읽혔다」가 보고된다(2026-09-16 리뷰가 잡았다).
+printf '{"result":{"messages":[{"id":"msg_q1","type":"question","thread_id":"msg_q1","read":1}]}}\n' > "$SB/inbox-qonly.json"
+cat > "$SB/bin/orca" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$SB/argv"
+case "\$*" in
+  *"worker-show"*) cat "$SB/ws.json" ;;
+  *"inbox"*)       cat "$SB/inbox-qonly.json" ;;
+  *) echo '{"ok":true}' ;;
+esac
+EOF
+chmod +x "$SB/bin/orca"; : > "$SB/argv"
+run --reply msg_q1 --body "답" --wait-read 4 >/dev/null
+grep -q 'read:false' "$SB/out" && ok "⭐ 원 질문의 read 는 답이 아니다" || bad "원 질문을 답으로 셌다 ($(cat "$SB/out"))"
+
+echo "== t14. ⛔ --to 경로의 --wait-read 는 못 잰다고 말한다(false 로 단정하지 않는다) =="
+# 이 래퍼의 주 용법이고, 여기서 거짓 음성이 나면 코디네이터가 같은 지시를 다시 보낸다.
+mk_orca "" "$SB/ws.json"
+run --to dispatch:ctx_aaa --body "본문" --wait-read 4 >/dev/null
+grep -q 'read:unknown' "$SB/out" && ok "read:unknown 으로 남긴다" || bad "출력이 틀리다 ($(cat "$SB/out"))"
+grep -q -- '--reply 에서만 잰다' "$SB/err" && ok "왜 못 재는지 말한다" || bad "사유가 없다"
 
 echo "== t12. ⭐ 사보타주 — 깨우기 단계를 지우면 t1 이 붉어진다 =="
 sed 's@^    if "\$ORCA_BIN" terminal send@    if false \&\& "$ORCA_BIN" terminal send@' "$SH" > "$SB/sab.sh"

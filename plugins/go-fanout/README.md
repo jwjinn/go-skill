@@ -65,12 +65,19 @@ python3 scripts/_crossing.py <base ref> <워크트리…>                       
 ## 대조군
 
 ```bash
-bash hooks/_runs.test.sh                  # 16검사(관여 run 판별 — 게이트 둘이 공유한다)
-bash hooks/coordinator-inbox-gate.test.sh # 56검사(축 셋 · run 스코프 · heartbeat · 문서 축)
-bash hooks/wave-close-gate.test.sh        # 31검사
-bash scripts/coordinator-send.test.sh     # 35검사(inbox + 터미널 깨우기 · 가짜 orca 가 argv 를 센다)
-bash scripts/cleanup.test.sh              # 27검사
-#                                           합계 165검사
+bash hooks/_runs.test.sh                  # 관여 run 판별 — 게이트 둘이 공유한다
+bash hooks/coordinator-inbox-gate.test.sh # 축 셋 · run 스코프 · heartbeat · 인박스 상한 · 문서 축
+bash hooks/wave-close-gate.test.sh        # 파도 마감
+bash scripts/coordinator-send.test.sh     # inbox + 터미널 깨우기(가짜 orca 가 argv 를 센다)
+bash scripts/cleanup.test.sh              # 회수 · 대조군 고아
+```
+
+⚠ **검사 수를 문서에 적지 않는다.** 2026-09-16 에 같은 수가 네 자리에 서로 다르게 적혀 있었다
+(README 165 · SKILL.md 50 · plugin.json 78 · 실제 186). 이 체인은 「몇 개를 세었나」를 탐지
+수단으로 쓰는데, 그 수가 문서마다 다르면 수단 자체가 무뎌진다. **정본은 스위트 출력의 마지막
+줄**이다 — 돌려서 보라.
+
+```bash
 ```
 
 각 스위트에 사보타주가 들어 있다. 회수 판정을 지우면 다 치운 파도도 막히고, 세션 스코프를

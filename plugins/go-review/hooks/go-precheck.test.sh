@@ -213,8 +213,22 @@ FAN_QP="$FAN_FULL"'
 '
 setup; printf '%s' "$FAN_QP" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
 out=$(run "/go")
-printf '%s' "$out" | grep -q '병렬 배치 협의 항목(Q-P) 있음' && ok "Q-P 가 있으면 있다고 센다" || ng "Q-P 미인식" "$out"
+printf '%s' "$out" | grep -q '병렬 배치 협의 항목(Q-P)이 결정 절에 있다' && ok "결정 절의 Q-P 를 센다" || ng "Q-P 미인식" "$out"
 printf '%s' "$out" | grep -q '워커가 2명인데' && ng "있는데 없다고 함" "$out" || ok "그때는 요구하지 않는다"
+cleanup
+
+# ⭐⭐ 반대 방향 — 결정 절 **밖**의 Q-P 는 없는 것으로 센다(2026-09-16 리뷰 둘이 지적한 자리).
+#   초안 전체를 훑으면 배치 표 옆 산문 한 줄이 잡혀 「승인 전에 사용자가 배치를 본다」고 단언하고,
+#   그 상태로 /go 가 돌면 워커 N명이 사용자 승인 없이 뜬다.
+FAN_QP_OUT="$FAN_FULL"'
+Q-P 는 위 배치 표로 갈음한다(여기는 결정 절이 아니다).
+
+## 결정 필요(승인 전)
+- [x] Q1 [질문] 다른 것 — 닫힘
+'
+setup; printf '%s' "$FAN_QP_OUT" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go")
+printf '%s' "$out" | grep -q '워커가 2명인데' && ok "⭐ 결정 절 밖의 Q-P 는 세지 않는다" || ng "절 밖 Q-P 를 인정했다" "$out"
 cleanup
 
 FAN_ONE="$BIG"'

@@ -25,9 +25,15 @@
 #
 # # 해법 문구에 `inbox` 를 적지 마라
 #
-# `orca orchestration inbox` 는 **읽음 표시를 바꾸지 않는다**(실측). 소비하는 것은
-# `check --ack` 하나다. 해법에 `inbox` 를 적으면 코디네이터가 그것을 부르고, 미읽음은 그대로
-# 남아 다음 턴에 또 막힌다 — 게이트가 「풀 수 없는 게이트」가 된다.
+# `orca orchestration inbox` 는 **읽음 표시를 바꾸지 않는다.** 처음에는 인박스 695건을 세어
+# 얻은 추정이었고, 2026-09-16 에 `--help` 로 확인했다 — `inbox` 는 「Show messages」일 뿐이고
+# 읽음을 다루는 것은 `check` 뿐이다(`--peek`·`--all` 만 「does not mark read」라고 따로 적혀 있다).
+# 해법에 `inbox` 를 적으면 코디네이터가 그것을 부르고, 미읽음은 그대로 남아 다음 턴에 또 막힌다 —
+# 게이트가 「풀 수 없는 게이트」가 된다.
+#
+# ⭐ 소비는 **두 걸음**이다(같은 `--help` 의 Notes): 기본 `check` 가 FIFO 배치를 돌려주며 읽음으로
+#   표시하고, `--ack` 가 그 배치를 닫는다. 「A bound Run replays the same Delivery until --ack」라
+#   적혀 있으므로 **ack 하지 않으면 같은 배치가 계속 돌아온다.** 그래서 문구는 둘을 다 말한다.
 #
 # # run 스코프 — 이 세션이 관여한 run 만 (사용자 결정 D2)
 #
@@ -63,6 +69,11 @@ ORCA_BIN="${ORCA_BIN:-orca}"
 # ⭐ 안내 문구가 **실제로 실행되는 경로**를 말해야 한다 — 심링크 설치와 마켓플레이스 설치에서
 #   경로가 다르므로 고정 문자열을 적지 마라.
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)}"
+# ⚠ 상한 카운터는 **세션 단위**다(2026-09-16 리뷰가 잡았다). 사용자 단위로 두면 세션 A 가 8회를
+#   소진했을 때 같은 기계의 세션 B 에서 게이트가 조용히 꺼진다 — run 스코프를 세션별로 좁힌
+#   결정(D2)과 반대 방향의 누수다. session_id 를 못 얻으면 종전 이름으로 떨어지고, 그 사실을
+#   차단 문구에 남긴다.
+STAMP_FALLBACK=0
 STAMP="${TMPDIR:-/tmp}/coordinator-inbox-gate.$(id -u).count"
 HB_GAP_MIN="${CLAUDE_WORKER_HB_GAP_MIN:-30}"
 
@@ -77,6 +88,16 @@ TR=''
 if [ -n "$IN" ] && command -v jq >/dev/null 2>&1; then
   TR=$(printf '%s' "$IN" | jq -r '.transcript_path // ""' 2>/dev/null || true)
 fi
+SESSION_ID=''
+if [ -n "$IN" ] && command -v jq >/dev/null 2>&1; then
+  SESSION_ID=$(printf '%s' "$IN" | jq -r '.session_id // ""' 2>/dev/null || true)
+fi
+if [ -n "$SESSION_ID" ]; then
+  STAMP="${TMPDIR:-/tmp}/coordinator-inbox-gate.$(id -u).${SESSION_ID}.count"
+else
+  STAMP_FALLBACK=1
+fi
+
 . "$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/_runs.sh" 2>/dev/null || true
 # ⛔⛔ 관여 판별의 재료는 **파일로** 넘긴다. 환경변수로 넘겼더니 긴 세션에서 `python3 -c` 호출이
 #   통째로 실패했고(인자 길이 상한), 그 실패는 `|| exit 0` 을 타고 **조용한 통과**가 됐다.
@@ -86,7 +107,9 @@ SEEN_FILE=''
 SCOPED=0
 if [ -n "$TR" ] && command -v session_seen >/dev/null 2>&1; then
   SEEN_FILE="${TMPDIR:-/tmp}/coordinator-inbox-gate.seen.$$"
-  if session_seen "$TR" > "$SEEN_FILE" 2>/dev/null; then
+  # ⚠ 재료가 **비어 있으면 좁히지 않는다.** 읽기에는 성공했어도 run 흔적이 하나도 없으면
+  #   「관여한 run 이 없다」가 아니라 「이 기록으로는 못 가른다」로 읽는 것이 안전한 방향이다.
+  if session_seen "$TR" > "$SEEN_FILE" 2>/dev/null && [ -s "$SEEN_FILE" ]; then
     SCOPED=1
   else
     rm -f "$SEEN_FILE"; SEEN_FILE=''
@@ -127,8 +150,21 @@ N=$(cat "$STAMP" 2>/dev/null || echo 0)
 case "$N" in ''|*[!0-9]*) N=0 ;; esac
 [ "$N" -ge "$MAX" ] && exit 0
 
-OUT=$("$ORCA_BIN" orchestration inbox --json 2>/dev/null) || exit 0
+# ⚠ `--limit` 을 명시한다(2026-09-16 리뷰가 잡았다). 기본 반환 건수가 인박스 전량보다 작으면
+#   **오래된 미읽음**이 잘린 구간에 남아 게이트가 「막을 것 0」을 낸다. 이 게이트가 잡으려는
+#   「run 7 중 6 에서 소비 0」이 정확히 그 오래된 쪽이다. 같은 레포의 다른 자리도 200 을 쓴다.
+# 실측(2026-09-16): 이 기계의 인박스가 695건이고 그중 63%가 heartbeat 이다. 500 이면
+#   상한에 닿아 오래된 미읽음이 잘린다 — 넉넉히 잡고, 그래도 닿으면 아래에서 말한다.
+INBOX_LIMIT="${CLAUDE_INBOX_LIMIT:-2000}"
+OUT=$("$ORCA_BIN" orchestration inbox --limit "$INBOX_LIMIT" --json 2>/dev/null) || exit 0
 [ -n "$OUT" ] || exit 0
+# ⚠ 반환이 상한에 닿았으면 전수를 못 본 것이다 — 조용히 넘기지 않는다.
+N_MSG=$(printf '%s' "$OUT" | python3 -c 'import json,sys
+try: print(len((json.load(sys.stdin).get("result") or {}).get("messages") or []))
+except Exception: print(0)' 2>/dev/null)
+case "$N_MSG" in ''|*[!0-9]*) N_MSG=0 ;; esac
+[ "$N_MSG" -ge "$INBOX_LIMIT" ] && \
+  echo "⚠ 인박스를 ${INBOX_LIMIT}건까지만 읽었다(상한에 닿았다) — 더 오래된 미읽음은 이 판정에 들어오지 않았다. CLAUDE_INBOX_LIMIT 을 올려라." >&2
 WL=$("$ORCA_BIN" orchestration worker-list --json 2>/dev/null) || WL=''
 
 # ⭐ 판정은 한 곳에서 한다 — 축 셋 + heartbeat 공백. 출력 형식:
@@ -156,11 +192,31 @@ if scoped:
     except Exception:
         scoped = False                                   # 재료를 못 읽으면 좁히지 않는다
 
+# ⛔⛔ 「지금 살아 있는 워커가 있는 run」은 **transcript 와 무관하게 본다**(2026-09-16 리뷰).
+#   인계를 막 받은 세션의 첫 턴에는 run_id 가 기록에 없다 — 인계문을 읽고 보고를 쓰는 것이
+#   전부다. 그때 스코프가 모든 메시지를 걸러내면, 살아 있는 파도의 미읽음을 안은 채 턴이
+#   끝난다. 이 게이트가 막으려는 바로 그 턴이다.
+#   ⇒ 좁히는 목적은 「끝난 옛 run 의 잔여로 막지 않는 것」(D2)이므로, 아직 도는 run 은 예외다.
+live_runs = set()
+try:
+    with io.open(os.environ.get("GATE_WL_FILE") or "", encoding="utf-8", errors="replace") as f:
+        _ws = (json.loads(f.read() or "{}").get("result") or {}).get("workers") or []
+    for _w in _ws:
+        if str(_w.get("workerState") or "").lower() not in (
+                "succeeded", "failed", "stopped", "cancelled", "canceled"):
+            r = _w.get("runId")
+            if r:
+                live_runs.add(str(r))
+except Exception:
+    pass
+
 def mine(m):
     """이 세션이 관여한 run 인가. 좁힐 수 없으면 전부 본다(게이트를 끄지 않는다)."""
+    r = str(m.get("run_id") or "")
+    if r and r in live_runs:
+        return True                                      # 지금 도는 파도는 누구의 것이든 본다
     if not scoped:
         return True
-    r = m.get("run_id") or ""
     if not r:
         return True                                      # run 을 모르는 메시지는 좁히지 않는다
     return r in seen
@@ -222,61 +278,79 @@ for axis, m in out:
 # ── heartbeat 공백 축(차단 아님) ─────────────────────────────────────────────
 # settled 가 아닌 워커인데 마지막 heartbeat 이 오래됐다. ask·check --wait 로 막힌 워커는
 # heartbeat 을 건너뛰므로(Orca 계약) 이것은 「죽었다」가 아니라 「봐라」다.
-SETTLED = {"succeeded", "failed", "stopped", "cancelled", "canceled"}
+# ⛔⛔ 이 축은 **알림**이라 차단 축보다 약하다. 그런데 여기서 예외가 나면 python 이 rc≠0 으로
+#   끝나고, 셸의 `|| exit 0` 이 **이미 찍은 BLOCK 줄까지 버린다** — 알림 축 하나가 차단 축 셋을
+#   통째로 끄는 모양이다(2026-09-16 리뷰가 잡았다). 그래서 통째로 감싼다.
 try:
-    gap_min = int(os.environ.get("GATE_HB_GAP_MIN") or 30)
+  SETTLED = {"succeeded", "failed", "stopped", "cancelled", "canceled"}
+  try:
+      gap_min = int(os.environ.get("GATE_HB_GAP_MIN") or 30)
+  except Exception:
+      gap_min = 30
+
+  def parse_ts(v):
+      """타임존이 없는 값은 UTC 로 본다 — aware 와 naive 를 빼면 TypeError 가 나고,
+      그 예외가 차단 축의 출력까지 버린다(2026-09-16 리뷰가 잡았다)."""
+      if not v:
+          return None
+      try:
+          t = datetime.datetime.fromisoformat(str(v).replace("Z", "+00:00").replace(" ", "T", 1))
+      except Exception:
+          return None
+      if t.tzinfo is None:
+          t = t.replace(tzinfo=datetime.timezone.utc)
+      return t
+
+  now = parse_ts(os.environ.get("GATE_TEST_NOW")) or datetime.datetime.now(datetime.timezone.utc)
+
+  last_hb = {}
+  for m in ms:
+      if m.get("type") != "heartbeat" or not mine(m):
+          continue
+      try:
+          did = (json.loads(m.get("payload") or "{}") or {}).get("dispatchId")
+      except Exception:
+          did = None
+      ts = parse_ts(m.get("created_at"))
+      if did and ts and (did not in last_hb or ts > last_hb[did]):
+          last_hb[did] = ts
+
+  try:
+      with io.open(os.environ.get("GATE_WL_FILE") or "", encoding="utf-8", errors="replace") as f:
+          ws = (json.loads(f.read() or "{}").get("result") or {}).get("workers") or []
+  except Exception:
+      ws = []
+  for w in ws:
+      if str(w.get("workerState") or "").lower() in SETTLED:
+          continue
+      if scoped and str(w.get("runId") or "") and str(w.get("runId")) not in seen:
+          continue
+      did = w.get("dispatchId")
+      ts = last_hb.get(did)
+      if not ts:
+          # ⚠ 「못 봤다」를 「괜찮다」로 읽지 마라(2026-09-16 리뷰). heartbeat 은 인박스의
+          #   3분의 2 를 차지하므로 조회 창이 좁으면 **가장 조용한 워커부터** 창 밖으로 밀린다.
+          #   그러면 알림이 필요한 순간에만 침묵한다. 따로 세어 말한다.
+          print("HB?\t%s\t%s" % (did, w.get("agentTerminalHandle") or ""))
+          continue
+      mins = int((now - ts).total_seconds() // 60)
+      if mins >= gap_min:
+          print("HB\t%s\t%s\t%s" % (did, mins, w.get("agentTerminalHandle") or ""))
 except Exception:
-    gap_min = 30
-
-def parse_ts(v):
-    if not v:
-        return None
-    try:
-        return datetime.datetime.fromisoformat(str(v).replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-now = parse_ts(os.environ.get("GATE_TEST_NOW")) or datetime.datetime.now(datetime.timezone.utc)
-
-last_hb = {}
-for m in ms:
-    if m.get("type") != "heartbeat" or not mine(m):
-        continue
-    try:
-        did = (json.loads(m.get("payload") or "{}") or {}).get("dispatchId")
-    except Exception:
-        did = None
-    ts = parse_ts(m.get("created_at"))
-    if did and ts and (did not in last_hb or ts > last_hb[did]):
-        last_hb[did] = ts
-
-try:
-    with io.open(os.environ.get("GATE_WL_FILE") or "", encoding="utf-8", errors="replace") as f:
-        ws = (json.loads(f.read() or "{}").get("result") or {}).get("workers") or []
-except Exception:
-    ws = []
-for w in ws:
-    if str(w.get("workerState") or "").lower() in SETTLED:
-        continue
-    if scoped and str(w.get("runId") or "") and str(w.get("runId")) not in seen:
-        continue
-    did = w.get("dispatchId")
-    ts = last_hb.get(did)
-    if not ts:
-        continue                                         # heartbeat 을 한 번도 못 본 워커는 셈이 없다
-    mins = int((now - ts).total_seconds() // 60)
-    if mins >= gap_min:
-        print("HB\t%s\t%s\t%s" % (did, mins, w.get("agentTerminalHandle") or ""))
+  pass                                                 # 알림 축의 실패가 차단 축을 끄지 않는다
 ' 2>/dev/null) || exit 0
 
 BLOCKS=$(printf '%s\n' "$PENDING" | grep -c '^BLOCK	' 2>/dev/null || printf '0')
-HBS=$(printf '%s\n' "$PENDING" | grep -c '^HB	' 2>/dev/null || printf '0')
+HBS=$(printf '%s\n' "$PENDING" | grep -cE '^HB\??	' 2>/dev/null || printf '0')
 case "$BLOCKS" in ''|*[!0-9]*) BLOCKS=0 ;; esac
 case "$HBS" in ''|*[!0-9]*) HBS=0 ;; esac
 
 hb_lines() {
   printf '%s\n' "$PENDING" | grep '^HB	' | while IFS='	' read -r _ did mins handle; do
     echo "  · $did — 마지막 heartbeat ${mins}분 전 (터미널 $handle)"
+  done
+  printf '%s\n' "$PENDING" | grep '^HB?	' | while IFS='	' read -r _ did handle; do
+    echo "  · $did — heartbeat 을 조회 창 안에서 **못 봤다**(죽었는지 조용한지 모른다 · 터미널 $handle)"
   done
 }
 
@@ -316,16 +390,20 @@ axis_block() { # <축> <제목> <해법>
   axis_block question   "워커가 답을 기다린다(멈춰 있다)" \
     "bash $PLUGIN_ROOT/scripts/coordinator-send.sh --reply <msg_id> --body \"<답>\""
   axis_block worker_done "끝난 워커의 완료 보고를 안 읽었다" \
-    "orca orchestration check --ack --json 으로 소비한 뒤 자원 회수(release)나 재사용을 정해라"
+    "orca orchestration check --json 으로 받아 전부 처리한 뒤 --ack 를 붙여 배치를 닫아라(ack 전에는 같은 배치가 반복된다). 그 다음 자원 회수(release)나 재사용을 정해라"
   axis_block escalation  "워커가 문제를 알렸는데 안 읽었다" \
-    "orca orchestration check --ack --json 으로 읽고 조치해라"
-  echo "⚠ 읽음 표시를 바꾸는 것은 check --ack 하나다. inbox 는 몇 번을 봐도 read 가 0 이다(실측)."
+    "orca orchestration check --json 으로 읽고 조치한 뒤 --ack 로 닫아라"
+  echo "⚠ 읽음 표시를 바꾸는 것은 check 다(--peek·--all 은 바꾸지 않는다). inbox 는 몇 번을 봐도 read 가 0 이다."
   if [ "$HBS" -gt 0 ]; then
     echo
     echo "⏱ 덧붙여, ${HB_GAP_MIN}분 넘게 조용한 워커가 ${HBS}명이다:"
     hb_lines
   fi
   echo
-  echo "(이 게이트는 세션당 ${MAX}회까지만 막는다 · 현재 $((N+1))회)"
+  if [ "$STAMP_FALLBACK" = "1" ]; then
+    echo "(이 게이트는 ${MAX}회까지만 막는다 · 현재 $((N+1))회 — ⚠ session_id 를 못 받아 **이 기계의 모든 세션이 그 예산을 나눠 쓴다**)"
+  else
+    echo "(이 게이트는 세션당 ${MAX}회까지만 막는다 · 현재 $((N+1))회)"
+  fi
 } >&2
 exit 2

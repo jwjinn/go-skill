@@ -253,46 +253,41 @@ fi
 step "⑥ 파도 밖 잔재(알림 — 이 파도를 막지 않는다)"
 
 # (a) 대조군 스크립트가 남긴 워크트리. go-tester 가 「보호를 깨서 붉어지는지」 볼 때 만든다.
-#     ⛔ 미커밋이 있으면 후보에서 뺀다 — 그 안에 사람이 봐야 할 것이 들어 있을 수 있다.
-# ⚠ macOS 에서 `/tmp` 는 `/private/tmp` 의 심링크다. 둘을 다 훑으면 **같은 워크트리를 두 번**
-#   세고(실측 2026-09-16: 후보 2개가 4개로 보고됐다), `--apply` 는 두 번째에서 실패를 낸다.
-#   실경로로 정규화해 중복을 지운다 — 「개수를 세라」가 이 체인의 탐지 수단인데 그 수가 틀리면 안 된다.
-CG_ROOTS="${CLAUDE_CG_ROOTS:-/private/tmp/go-tester/cg /tmp/go-tester/cg}"
-CG_HOURS="${CLAUDE_CG_ORPHAN_HOURS:-6}"
+#     ⭐ 판정은 `_cg.sh` 하나가 한다 — `cleanup.sh --cg-orphans` 와 **같은 함수**다. 세는 쪽과
+#       지우는 쪽이 각자 판단하면 「보고한 수」와 「지운 수」가 갈라진다(2026-09-16 리뷰).
+. "$SELF/_cg.sh" 2>/dev/null || true
 cg_cands=''; cg_skip=''
-cg_seen=''
-for root in $CG_ROOTS; do
-  [ -d "$root" ] || continue
-  for wt_raw in "$root"/wt-*; do
-    [ -d "$wt_raw" ] || continue
-    wt=$(cd "$wt_raw" 2>/dev/null && pwd -P) || wt="$wt_raw"
-    case " $cg_seen " in *" $wt "*) continue ;; esac
-    cg_seen="$cg_seen $wt"
-    age_h=$(python3 -c 'import os,sys,time;print(int((time.time()-os.path.getmtime(sys.argv[1]))//3600))' "$wt" 2>/dev/null || echo 0)
-    case "$age_h" in ''|*[!0-9]*) age_h=0 ;; esac
-    [ "$age_h" -ge "$CG_HOURS" ] || continue
-    dirty=$(git -C "$wt" status --porcelain 2>/dev/null | grep -c . || true)
-    case "$dirty" in ''|*[!0-9]*) dirty=0 ;; esac
-    if [ "$dirty" -gt 0 ]; then
-      cg_skip="${cg_skip}    · $wt — 미커밋 ${dirty}건이라 후보에서 뺀다(사람이 본다)\n"
-    else
-      cg_cands="${cg_cands}    · $wt — ${age_h}시간 전 · 미커밋 0\n"
-    fi
-  done
-done
+if command -v cg_candidates >/dev/null 2>&1; then
+  while IFS="$(printf '\t')" read -r state wt age n; do
+    [ -n "$state" ] || continue
+    case "$state" in
+      cand)    cg_cands="${cg_cands}    · $wt — ${age}시간 전 · 미커밋 0\n" ;;
+      dirty)   cg_skip="${cg_skip}    · $wt — 미커밋 ${n}건이라 후보에서 뺀다(사람이 본다)\n" ;;
+      unknown) cg_skip="${cg_skip}    · $wt — git status 를 못 돌렸다 · 미커밋 여부를 모른다\n" ;;
+    esac
+  done <<CGEOF
+$(cg_candidates)
+CGEOF
+else
+  echo "  ⚠ _cg.sh 를 못 읽어 대조군 고아를 세지 못했다."
+fi
 if [ -n "$cg_cands" ]; then
-  printf '  ⚠ 대조군 고아 워크트리(미커밋 0 · %s시간 이상):\n' "$CG_HOURS"
+  printf '  ⚠ 대조군 고아 워크트리(미커밋 0 · %s시간 이상):\n' "${CLAUDE_CG_ORPHAN_HOURS:-6}"
   printf "$cg_cands"
   printf '    → 지우려면: bash %s/cleanup.sh --cg-orphans --apply\n' "$SELF"
 fi
-[ -n "$cg_skip" ] && { echo "  ⛔ 미커밋이 있어 건드리지 않는 것:"; printf "$cg_skip"; }
+[ -n "$cg_skip" ] && { echo "  ⛔ 건드리지 않는 것:"; printf "$cg_skip"; }
 [ -n "$cg_cands$cg_skip" ] || fine "대조군 고아 없음"
 
 # (b) Orca 장부와 실제 터미널의 차이. 코디네이터는 retained 터미널을 닫을 수 없다(Orca 정본:
 #     「Never substitute terminal close」). 그러니 여기서 하는 일은 **가르고 사람에게 넘기는 것**이다.
+# ⚠ **전역 장부를 본다**(2026-09-16 리뷰). 위의 `$WL` 은 `--run $RUN` 으로 받은 이 파도의
+#   것이라, 그것만 보면 다른 run 의 retained 레코드가 있어도 「✅ 없음」이 나온다. 이 절의 제목이
+#   「파도 밖의 잔재」인데 파도 안만 보는 모양이었다 — 볼 곳을 반대로 가리키는 부류다.
 TL="$("$ORCA_BIN" terminal list --json 2>/dev/null)" || TL=''
-if [ -n "$TL" ]; then
-  printf '%s' "$WL" | GATE_TL="$TL" python3 -c '
+WL_ALL="$("$ORCA_BIN" orchestration worker-list --json 2>/dev/null)" || WL_ALL=''
+if [ -n "$TL" ] && [ -n "$WL_ALL" ]; then
+  printf '%s' "$WL_ALL" | GATE_TL="$TL" python3 -c '
 import json, os, sys
 try:
     ws = (json.load(sys.stdin).get("result") or {}).get("workers") or []
@@ -300,10 +295,22 @@ try:
 except Exception:
     raise SystemExit(0)
 live = {t.get("handle") for t in ts if t.get("handle")}
+retained = [w for w in ws if str(w.get("terminalState") or "").lower() == "retained"]
+mine_h = {w.get("agentTerminalHandle") for w in retained if w.get("agentTerminalHandle")}
+
+# ⛔⛔ 두 목록이 **같은 이름 공간을 쓴다는 전제**가 있다(2026-09-16 리뷰가 잡았다).
+#   틀리면 `h in live` 가 언제나 거짓이 되어 retained 전부가 「터미널이 없다 · 자원은 이미
+#   풀렸다」로 분류된다. 정리가 안 되는 것을 찾으려고 만든 축이 정확히 그 증상을 은폐하는
+#   방향이다. 「모든 입력에 같은 답」이 나오면 데이터가 아니라 도구를 먼저 의심한다.
+#   ⇒ 양쪽 다 비어 있지 않은데 교집합이 0 이면 **가르지 않고 못 쟀다고 말한다.**
+if retained and live and not (mine_h & live):
+    print("  ⚠ 장부의 핸들과 실제 터미널 목록이 **한 건도 겹치지 않는다**(retained %d · 열린 터미널 %d)."
+          % (len(retained), len(live)))
+    print("     두 목록이 같은 이름 공간을 쓰지 않을 수 있다 — 가르지 않는다(모르는 것을 근거로 「이미 풀렸다」고 말하지 않는다).")
+    raise SystemExit(0)
+
 alive, ghost = [], []
-for w in ws:
-    if str(w.get("terminalState") or "").lower() != "retained":
-        continue
+for w in retained:
     h = w.get("agentTerminalHandle")
     (alive if h in live else ghost).append((w.get("dispatchId"), h))
 if ghost:
@@ -320,7 +327,9 @@ if not ghost and not alive:
     print("  ✅ retained 레코드 없음")
 ' 2>/dev/null
 else
-  unmeasured "terminal list 를 못 받아 장부와 실제를 대조하지 못했다"
+  # ⚠ 여기서 `unmeasured` 를 부르면 **아무 효력이 없다** — 요약과 판정은 이미 위에서 지났다.
+  #   못 잰 것을 「검사 못 함 0」으로 말하지 않기 위해, 이 축은 자기 자리에서 스스로 말한다.
+  echo "  ⚠ terminal list 나 전역 worker-list 를 못 받아 장부와 실제를 대조하지 못했다 — 이 축은 **못 쟀다**(위의 「검사 못 함」 수에는 안 들어간다)."
 fi
 
 echo

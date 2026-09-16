@@ -184,7 +184,7 @@ printf '%s' "$out" | grep -q '건너뜀.*wt-fresh' && ok "⭐ 6시간 미만은 
 mk_wt dirty 30 3
 out=$(cg_run)
 printf '%s' "$out" | grep -q '⛔ 건너뜀.*wt-dirty.*미커밋 3건' && ok "⛔ 미커밋이 있으면 후보에서 빼고 사유를 말한다" || bad "미커밋을 지우려 한다" "$out"
-printf '%s' "$out" | grep -q '제외 1개' && ok "제외 개수를 따로 센다" || bad "제외 개수가 틀리다" "$out"
+printf '%s' "$out" | grep -q '건드리지 않음 1개' && ok "건드리지 않은 개수를 따로 센다" || bad "그 개수가 틀리다" "$out"
 
 echo "== ⭐ --apply 는 미커밋 0 인 것만 지운다 =="
 out=$(cg_run --apply)
@@ -200,10 +200,24 @@ out=$(CLAUDE_CG_ROOTS="$CG/cg $CG/cg-link" bash "$SUT" --cg-orphans 2>&1)
 n=$(printf '%s' "$out" | grep -c '후보 .*wt-dup')
 [ "$n" = 1 ] && ok "같은 워크트리를 한 번만 센다" || bad "중복으로 셌다($n회)" "$out"
 
-echo "== ⭐ 사보타주 — 미커밋 검사를 지우면 dirty 도 후보가 된다 =="
-sed 's@if \[ "\$dirty" -gt 0 \]; then@if false; then@' "$SUT" > "$CG/sab.sh"
-out=$(CLAUDE_CG_ROOTS="$CG/cg" bash "$CG/sab.sh" --cg-orphans 2>&1)
+echo "== ⭐ 사보타주 — 미커밋 판정을 지우면 dirty 도 후보가 된다 =="
+# ⚠ 판정은 이제 `_cg.sh` 에 있다(cleanup 과 wave-close 가 공유한다). 사보타주도 그쪽에 건다 —
+#   사본을 나란히 두어야 `dirname $0` 으로 찾는다.
+mkdir -p "$CG/sab"
+cp "$SUT" "$CG/sab/cleanup.sh"
+sed 's@if \[ "\$_cg_n" -gt 0 \]; then@if false; then@' "$HERE/_cg.sh" > "$CG/sab/_cg.sh"
+out=$(CLAUDE_CG_ROOTS="$CG/cg" bash "$CG/sab/cleanup.sh" --cg-orphans 2>&1)
 printf '%s' "$out" | grep -q '후보.*wt-dirty' && ok "사보타주하면 미커밋이 후보로 올라온다(탐지기가 살아 있다)" || bad "사보타주해도 그대로다" "$out"
+
+echo "== ⭐⭐ git 을 못 돌리면 지우지 않는다(모르면 건드리지 않는다) =="
+# 실측 부류: dubious ownership·인덱스 손상이면 stdout 이 비어 「미커밋 0」으로 보인다.
+mkdir -p "$CG/cg/wt-nogit"
+python3 -c 'import os,sys,time;t=time.time()-40*3600;os.utime(sys.argv[1],(t,t))' "$CG/cg/wt-nogit"
+out=$(cg_run)
+printf '%s' "$out" | grep -q 'git status 를 못 돌렸다' && ok "git 실패를 「모른다」로 분류한다" || bad "git 실패를 미커밋 0 으로 읽었다" "$out"
+printf '%s' "$out" | grep -q '후보.*wt-nogit' && bad "git 을 못 돌린 것을 후보로 올렸다" "$out" || ok "⭐ 후보로 올리지 않는다"
+out=$(cg_run --apply)
+[ -d "$CG/cg/wt-nogit" ] && ok "⛔ --apply 로도 지우지 않는다" || bad "git 을 못 돌린 것을 지웠다" "$out"
 rm -rf "$CG"
 
 echo "통과 $PASS · 실패 $FAIL"

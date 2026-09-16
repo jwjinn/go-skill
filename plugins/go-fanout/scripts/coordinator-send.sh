@@ -157,13 +157,23 @@ if [ "$nudge" = yes ]; then
 fi
 
 # ── ⑤ 읽혔나 ────────────────────────────────────────────────────────────────
+# ⚠⚠ 못 잰 것을 「안 읽혔다」로 말하지 마라(2026-09-16 리뷰 둘이 같은 자리를 지적했다).
+#   ① `--to` 경로에는 폴링할 id 가 없다 — `reply` 와 달리 스레드가 없다. 첫 판은 그 경로에서도
+#      30초를 다 재운 뒤 `read:false` 를 찍었고, 코디네이터는 그것을 「안 닿았다」로 읽어 같은
+#      지시를 다시 보내거나 죽은 워커 절차로 넘어간다. 이 래퍼의 주 용법에서 계측이 늘 거짓
+#      음성이었다. ⇒ 그 경로는 `read:unknown` 이다(정직 공백).
+#   ② `--reply` 경로에서 원 질문 자신이 매치됐다. 질문은 `id == thread_id` 라서, 코디네이터가
+#      게이트 지시대로 `check` 로 인박스를 소비한 뒤 답을 보내면 **그 질문의 read=1** 이 걸려
+#      즉시 `read:true` 가 나왔다. 워커는 답을 못 받았는데 「읽혔다」로 보고된 것이다.
+#      ⇒ 자기 자신을 빼고, 코디네이터가 보낸 답(`to_handle` 이 `dispatch:`)만 센다.
 read_state='unknown'
 case "$wait_read" in ''|*[!0-9]*) wait_read=0 ;; esac
-if [ "$wait_read" -gt 0 ] && [ "$nudge_only" -eq 0 ]; then
+if [ "$wait_read" -gt 0 ] && [ "$nudge_only" -eq 0 ] && [ -n "$reply_id" ]; then
   waited=0
   while [ "$waited" -lt "$wait_read" ]; do
     sleep 2; waited=$((waited+2))
-    st=$("$ORCA_BIN" orchestration inbox --json 2>/dev/null | REPLY_ID="${reply_id:-}" python3 -c '
+    st=$("$ORCA_BIN" orchestration inbox --limit "${CLAUDE_INBOX_LIMIT:-2000}" --json 2>/dev/null \
+         | REPLY_ID="$reply_id" python3 -c '
 import json, os, sys
 try:
     ms = (json.load(sys.stdin).get("result") or {}).get("messages") or []
@@ -171,12 +181,20 @@ except Exception:
     raise SystemExit(0)
 rid = os.environ.get("REPLY_ID") or ""
 for m in ms:
-    if rid and m.get("thread_id") == rid and m.get("read"):
+    if not rid or m.get("thread_id") != rid:
+        continue
+    if m.get("id") == rid:
+        continue                                         # 원 질문 자신은 답이 아니다
+    if not str(m.get("to_handle") or "").startswith("dispatch:"):
+        continue                                         # 코디네이터가 워커에게 보낸 것만
+    if m.get("read"):
         print("read"); break
 ' 2>/dev/null)
     [ "$st" = read ] && { read_state=true; break; }
   done
   [ "$read_state" = unknown ] && read_state=false
+elif [ "$wait_read" -gt 0 ] && [ "$nudge_only" -eq 0 ]; then
+  echo "⚠ --wait-read 는 --reply 에서만 잰다(send 경로는 폴링할 스레드가 없다) — read:unknown 으로 남긴다." >&2
 fi
 
 printf 'sent:%s nudged:%s handle:%s read:%s\n' \

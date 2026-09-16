@@ -253,7 +253,8 @@ echo "== t18. ⛔ 해법 문구가 inbox 를 가리키면 안 된다 =="
 # `inbox` 는 read 를 바꾸지 않는다(실측). 해법에 그것을 적으면 코디네이터가 불러도 미읽음이
 # 남아 다음 턴에 또 막힌다 — 풀 수 없는 게이트가 된다.
 mk_orca "$SB/done-unread.json"; runtr "$SB/tr-mine.jsonl" >/dev/null
-grep -q 'check --ack' "$SB/err" && ok "check --ack 를 해법으로 말한다" || bad "check --ack 가 없다"
+grep -q 'orchestration check' "$SB/err" && ok "해법이 check 를 말한다" || bad "check 가 없다"
+grep -q -- '--ack' "$SB/err" && ok "해법이 --ack 로 배치를 닫으라고 말한다" || bad "--ack 가 없다"
 if grep -E '→ .*orchestration inbox' "$SB/err" >/dev/null; then bad "해법 줄이 inbox 를 가리킨다"
 else ok "해법 줄에 inbox 가 없다"; fi
 
@@ -320,6 +321,44 @@ grep -q '3건' "$SB/err" && ok "합계 3건을 말한다" || bad "합계가 틀�
 grep -q '답을 기다린다' "$SB/err" && ok "축 ① 절이 있다" || bad "축 ① 절이 없다"
 grep -q '완료 보고' "$SB/err"   && ok "축 ② 절이 있다" || bad "축 ② 절이 없다"
 grep -q '문제를 알렸' "$SB/err" && ok "축 ③ 절이 있다" || bad "축 ③ 절이 없다"
+
+echo "== t22-b. ⛔⛔ 인박스를 상한까지 읽는다 — 기본값은 20건이라 오래된 미읽음이 잘린다 =="
+# 실측(2026-09-16): `orca orchestration inbox --json` = 20건 · `--limit 1000` = 695건.
+# 미읽음 worker_done·escalation 21건 중 **16건(76%)이 기본 창 밖**이었다. 이 게이트가 잡으려는
+# 「run 7 중 6 에서 소비 0」이 바로 그 오래된 쪽이라, 창이 좁으면 필요한 순간에만 침묵한다.
+# heartbeat 이 인박스의 63%(439/695)를 차지해 작은 limit 으로는 창이 안 넓어진다.
+cat > "$SB/mk-inbox.py" <<'PYEOF'
+import json, sys
+n = int(sys.argv[1]); limit = int(sys.argv[2])
+ms = [{"id": "msg_h%d" % i, "type": "heartbeat", "run_id": "run_mine", "read": 1,
+       "created_at": "2026-09-16T15:00:00Z", "payload": "{}"} for i in range(n - 1)]
+ms.append({"id": "msg_old", "type": "worker_done", "run_id": "run_mine", "read": 0,
+           "from_handle": "term_w1", "subject": "오래된 완료 보고"})
+print(json.dumps({"result": {"messages": ms[:limit]}}))
+PYEOF
+cat > "$SB/bin/orca" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$SB/argv"
+case "\$*" in
+  *"worker-list"*) exit 0 ;;
+  *"inbox"*)
+    lim=20
+    case "\$*" in *"--limit"*) lim=\$(printf '%s\n' "\$@" | awk '/^--limit\$/{getline; print; exit}') ;; esac
+    python3 "$SB/mk-inbox.py" 60 "\${lim:-20}" ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$SB/bin/orca"; : > "$SB/argv"
+rc=$(rm -f "$SB/coordinator-inbox-gate.$(id -u)."*.count; printf '{"session_id":"s","transcript_path":"%s"}' "$SB/tr-mine.jsonl" \
+     | PATH="$SB/bin:$PATH" bash "$GATE" >"$SB/out" 2>"$SB/err"; echo $?)
+check "60건 중 60번째의 미읽음도 잡는다" "$rc" "2"
+grep -q 'msg_old' "$SB/err" && ok "그 메시지를 지목한다" || bad "오래된 미읽음을 못 봤다"
+grep -q -- '--limit' "$SB/argv" && ok "inbox 를 --limit 과 함께 부른다" || bad "--limit 없이 불렀다"
+# ⭐ 사보타주 — --limit 을 떼면 기본 20건만 보고 이 검사가 붉어진다
+sed 's@orchestration inbox --limit "\$INBOX_LIMIT" --json@orchestration inbox --json@' "$GATE" > "$SB/sab-limit.sh"
+rc=$(rm -f "$SB/coordinator-inbox-gate.$(id -u)."*.count; printf '{"session_id":"s","transcript_path":"%s"}' "$SB/tr-mine.jsonl" \
+     | PATH="$SB/bin:$PATH" bash "$SB/sab-limit.sh" >/dev/null 2>&1; echo $?)
+check "⭐ --limit 을 떼면 그 미읽음을 못 본다" "$rc" "0"
 
 echo "== t23. ⛔ 문서 축 — SKILL.md 의 **코드 블록**이 맨 전송 명령을 처방하면 안 된다 =="
 # 실측: 단독 send 55건 중 54건 미읽음. 처방이 래퍼를 가리켜야 그 98%가 닫힌다.
