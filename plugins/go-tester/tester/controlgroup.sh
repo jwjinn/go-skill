@@ -173,9 +173,20 @@ run_gate "$WT"
 RC_CLEAN=$?
 
 # ── ② 변이를 넣고 게이트가 실패하는가 ────────────────────────────────────────
-# sed -i 는 BSD/GNU 가 다르다 — 둘 다 받는다(이 레포군이 두 번 밟은 이식성 함정).
-if ! sed -i '' "$SEDEXPR" "$WT/$FILE" 2>/dev/null; then
-  sed -i "$SEDEXPR" "$WT/$FILE" 2>/dev/null || { emit false "$RC_CLEAN" "$RC_CLEAN" "sed 변이 적용 실패"; exit 68; }
+# 변이 유형에 따라 다르게 적용한다
+# --sed-type=python 일 경우, SEDEXPR 은 파이썬 스크립트 경로다
+# 그렇지 않으면 sed 표현식으로 처리한다
+VARIANT_TYPE="${VARIANT_TYPE:-sed}"
+if [ "$VARIANT_TYPE" = "python" ]; then
+  # 파이썬 스크립트로 변이 적용
+  if ! python3 "$SEDEXPR" "$WT/$FILE" 2>/dev/null; then
+    emit false "$RC_CLEAN" "$RC_CLEAN" "파이썬 변이 적용 실패"; exit 68
+  fi
+else
+  # sed 로 변이 적용 (BSD/GNU 이식성 대응)
+  if ! sed -i '' "$SEDEXPR" "$WT/$FILE" 2>/dev/null; then
+    sed -i "$SEDEXPR" "$WT/$FILE" 2>/dev/null || { emit false "$RC_CLEAN" "$RC_CLEAN" "sed 변이 적용 실패"; exit 68; }
+  fi
 fi
 if cmp -s "$WT/$FILE" "$REPO/$FILE" 2>/dev/null; then
   # ⚠ sed 가 아무것도 바꾸지 않았는데 「붉어지지 않았다」고 보고하면 그것은 거짓 음성이다.
