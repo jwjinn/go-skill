@@ -506,5 +506,84 @@ got=$(CLAUDE_PLUGIN_ROOT="$SB/empty/go-review" sibling_plugin go-없는것 x/y 2
 export HOME="$HOME_ORIG"
 rm -rf "$SB"
 
+echo "=== ⭐⭐ 위임 판정 격자 축 (2026-09-16)"
+# plan.md §6-b 2단계가 항목마다 격자 판정을 요구한다. 이 축은 **세기만** 한다 —
+# 차단하지 않는 것이 규약이고, 「명세부터」 갈래가 나와도 통과시켜야 한다(그것도 정상 판정이다).
+
+GRID_HEAD='# 제목
+
+## 목표 계약
+원 요청: "격자를 시험한다"
+수용 기준:
+  - 판정이 항목마다 붙는다
+범위 밖: 없음
+
+## 결정 필요(승인 전)
+- [x] Q1 [질문] 무엇 — 답: 그것
+
+## P1
+'
+
+setup
+# ① 판정이 전부 있으면 조용하다(✅ 로만 말한다)
+{ printf '%s' "$GRID_HEAD"
+  printf -- '- [ ] P1-1 하나\n      · **테스트부터(위임 가능 full)** — 순수 테스트다\n'
+  printf -- '- [ ] P1-2 둘\n      · **로컬 구현** — 명세 있음 · 테스트 있음 · 파일 1\n'
+  printf -- '- [ ] P1-3 셋\n      · **세션 모델** — 되돌리기 어렵다\n'
+  printf -- '- [ ] P1-4 넷\n      · **명세부터** — 경계가 안 정해졌다\n'
+} > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go-review:go 전부")
+printf '%s' "$out" | grep -q '위임 판정: 작업 항목 4개 전부에 있다' \
+  && ok "① 판정이 전부 있으면 ✅ 로 말한다(결정 절 항목은 세지 않는다)" || ng "전부 있음" "$out"
+
+# ④ ⭐ 「명세부터」 갈래가 있어도 **통과시킨다** — 그 갈래가 쓸 수 있어야 격자가 도는 것이다
+printf '%s' "$out" | grep -q '명세부터.*착수하지' \
+  && ng "명세부터를 막았다" "그 갈래는 정상 판정이다" \
+  || ok "④ ⭐ 「명세부터」 판정이 있어도 막지 않는다"
+cleanup
+
+# ② 하나 빠지면 개수와 함께 말한다
+setup
+{ printf '%s' "$GRID_HEAD"
+  printf -- '- [ ] P1-1 하나\n      · **테스트부터(위임 가능 full)** — 순수 테스트다\n'
+  printf -- '- [ ] P1-2 둘\n      · **로컬 구현** — 파일 1\n'
+  printf -- '- [ ] P1-3 셋\n      · **세션 모델** — 되돌리기 어렵다\n'
+  printf -- '- [ ] P1-4 넷 (판정 없음)\n'
+} > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go-review:go 전부")
+printf '%s' "$out" | grep -q '3/4 항목' && ok "② 빠진 항목이 있으면 3/4 로 센다" || ng "부분 누락" "$out"
+cleanup
+
+# ③ 격자가 아예 없는 옛 형식 초안 — 「하나도 없다」로 말한다(차단은 아니다)
+setup
+{ printf '%s' "$GRID_HEAD"
+  printf -- '- [ ] P1-1 하나\n- [ ] P1-2 둘\n- [ ] P1-3 셋\n- [ ] P1-4 넷\n'
+} > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go-review:go 전부")
+printf '%s' "$out" | grep -q '위임 판정이 하나도 없다' && ok "③ 옛 형식은 「하나도 없다」로 알린다" || ng "옛 형식" "$out"
+printf '%s' "$out" | grep -q '승인할 계획이 없다' && ng "옛 형식을 차단했다" "알림이어야 한다" \
+  || ok "③-b 옛 형식이어도 착수를 막지는 않는다"
+cleanup
+
+# ⑤ ⭐⭐ 대조군 — **본문 산문에 판정 이름이 나와도 세지 않는다**
+#   격자 자체를 도입하는 계획이 그렇다(자기 참조). `·` 로 시작하는 표기 줄만 세는지 확인한다.
+setup
+{ printf '%s' "$GRID_HEAD"
+  printf -- '- [ ] P1-1 격자를 넣는다 — 판정은 **명세부터** · **테스트부터** · **로컬 구현** 다섯이다\n'
+  printf -- '- [ ] P1-2 둘\n- [ ] P1-3 셋\n- [ ] P1-4 넷\n'
+} > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go-review:go 전부")
+printf '%s' "$out" | grep -q '위임 판정이 하나도 없다' \
+  && ok "⑤ ⭐⭐ 산문 속 판정 이름은 세지 않는다(표기 줄만 센다)" || ng "산문 오탐" "$out"
+cleanup
+
+# ⑥ 항목이 적으면(4 미만) 말하지 않는다 — 두 줄짜리 계획에 잔소리하지 않는다
+setup
+{ printf '%s' "$GRID_HEAD"; printf -- '- [ ] P1-1 하나\n- [ ] P1-2 둘\n'; } > "$T/.claude/plan-draft.md"
+setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go-review:go 전부")
+printf '%s' "$out" | grep -q '위임 판정' && ng "작은 계획에 발화" "$out" || ok "⑥ 항목 4개 미만이면 조용하다"
+cleanup
+
 printf '\npass=%s fail=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
