@@ -54,6 +54,24 @@ out=$(run)
 chk "소유자 불일치를 지목한다"          "$out" '작업 위치가 다르다' yes
 clean
 
+echo "=== ⭐ 계획 파일 두 형식 공존 (2026-09-16 · 다른 세션 관측)"
+# 고장은 아니다(문서도 게이트도 둘 다 인식한다). 다만 세션 중에 형식이 바뀌면 사람이
+# 어느 것이 정본인지 모른다 — 실제로 한 세션이 앞은 레거시로 뒤는 slug 로 진행했다.
+mkproj; mkdir -p "$P/.claude/plans/x"
+printf '# t\n\n작업 위치: %s\n\n## P0\n- [ ] 하나\n' "$P" > "$P/.claude/plan-active.md"
+printf '# t\n\n작업 위치: %s\n\n## P0\n- [ ] 둘\n' "$P" > "$P/.claude/plans/x/plan.md"
+out=$(run)
+chk "두 형식이 함께 있으면 알린다"      "$out" '두 형식으로 함께' yes
+chk "⭐ 차단이 아니라 경고다"            "$out" '⛔ 계획 파일이' no
+clean
+
+echo "=== 대조군 — 한 형식만 있으면 조용하다"
+mkproj; mkdir -p "$P/.claude/plans/x"
+printf '# t\n\n작업 위치: %s\n\n## P0\n- [ ] 둘\n' "$P" > "$P/.claude/plans/x/plan.md"
+out=$(run)
+chk "slug 만 있으면 형식 경고 없음"     "$out" '두 형식으로 함께' no
+clean
+
 echo "=== 계획이 자기 것이면 통과한다(사보타주의 반대 방향)"
 mkproj
 printf '# t\n\n작업 위치: %s\n\n## P0\n- [ ] 하나\n- [x] 둘\n' "$P" > "$P/.claude/plan-active.md"

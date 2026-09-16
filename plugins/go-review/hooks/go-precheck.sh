@@ -66,7 +66,14 @@ print(d.get("session_id") or "")' 2>/dev/null)
 [ -n "$session_id" ] || session_id=$(printf '%s' "$transcript" | sed 's@.*/@@; s@\.jsonl$@@')
 draft_err="${TMPDIR:-/tmp}/claude-draft-pick.$$"
 draft=$(draft_pick "$base" "$transcript" 2>"$draft_err") || draft=''
-n_fdraft=$(grep -c '^foreign:' "$draft_err" 2>/dev/null || printf '0'); rm -f "$draft_err"
+n_fdraft=$(grep -c '^foreign:' "$draft_err" 2>/dev/null || printf '0')
+# ⭐⭐ **이 세션의 초안이 둘 이상이면 말한다**(2026-09-16 실측). `draft_pick` 은 이름순 첫 것을
+#   돌려주는데, 둘 다 이 세션 것이면 뒤엣것은 `foreign:` 으로도 안 나와 **존재조차 보이지
+#   않았다.** 그날 승인 범위(`P1~P6`)는 뒤 초안의 단계 구성이었고, 안내를 그대로 따랐으면
+#   **승인받지 않은 계획을 착수했을 것이다.**
+#   ⚠ 고르는 것을 막지 않는다 — 위험한 것은 고르는 것이 아니라 **조용한 것**이다.
+also_mine=$(grep '^alsomine:' "$draft_err" 2>/dev/null | sed -e 's/^alsomine://' -e 's|.*/\.claude/||' | tr '\n' ' ')
+rm -f "$draft_err"
 case "$n_fdraft" in ''|*[!0-9]*) n_fdraft=0 ;; esac
 if [ -z "$draft" ] && [ "$n_fdraft" -gt 0 ]; then
   printf '[/go 사전 확인] ⚠ 이 워크트리에 **다른 세션의 초안 %s개**가 있다 — 네 것이 아니다. **옮기지 마라**(그러면 그 세션의 계획을 덮어쓴다). 네 초안은 `/plan` 으로 `.claude/plans/<slug>/draft.md` 에 새로 써라.\n' "$n_fdraft"
@@ -91,6 +98,9 @@ if [ "$fresh" -eq 1 ]; then
   boxes=$(grep -cE '^[[:space:]]*[-*+][[:space:]]+\[.\]' "$draft" 2>/dev/null || printf '0')
   case "$boxes" in ''|*[!0-9]*) boxes=0 ;; esac
   printf '[/go 사전 확인] 계획 초안 있음: %s (체크박스 %s개)\n' "$draft" "$boxes"
+  if [ -n "${also_mine:-}" ]; then
+    printf '⚠⚠ **이 세션의 초안이 더 있다**: %s— 위 지목은 **이름순 첫 번째**일 뿐이다. 사용자가 승인한 범위(단계 번호)가 어느 초안의 것인지 **확인하고 골라라.** 틀린 것을 옮기면 승인받지 않은 계획을 착수하게 된다(2026-09-16 실측: 그 상태로 `P1~P6` 을 승인받았는데 지목된 초안에는 P6 이 없었다). 다른 것을 쓰려면 `CLAUDE_PLAN_DRAFT_FILE=<경로>` 로 지정하거나 그 파일을 직접 옮겨라.\n' "$also_mine"
+  fi
   if [ "$boxes" -eq 0 ]; then
     printf '⚠ 그런데 체크박스가 0개다 — 단계를 `- [ ] 항목` 으로 적지 않으면 완주 게이트가 판정하지 못한다.\n'
   fi

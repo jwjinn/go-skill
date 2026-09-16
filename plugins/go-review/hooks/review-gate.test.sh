@@ -125,9 +125,52 @@ setup s12; printf '# p\n- [ ] 할일\n' > "$T/.claude/plan-active.md"; printf 'x
 expect "계획+코드변경+리뷰없음 → 경고" WARN "$(run)"; cleanup
 
 setup s13; printf '# p\n- [ ] 할일\n' > "$T/.claude/plan-active.md"; printf 'x\n' > "$T/a.go"
-mkdir -p "$T/.claude/review/runs/R1"; printf '{}' > "$T/.claude/review/runs/R1/merged.json"
+mkdir -p "$T/.claude/review/runs/R1" "$T/docs/리뷰-이력"
+printf '{}' > "$T/.claude/review/runs/R1/merged.json"
+# ⭐ 원장에도 그 라운드를 남긴다(2026-09-16 · 원장 누락 축 신설). 이 줄이 없으면 「리뷰가
+#   돌았으니 조용」이 아니라 「라운드는 있는데 원장에 없다」가 되어 새 축이 정확히 발화한다 —
+#   실제로 이 픽스처가 그 축을 처음 잡았고, 그것이 오탐이 아니라 픽스처의 결함이었다.
+printf '{"round":"R1"}\n' > "$T/docs/리뷰-이력/rounds.jsonl"
 setmtime "$T/.claude/review/runs/R1/merged.json" "$NOW"     # 사람 발화(-3600) 이후
 expect "이번 요청에 리뷰가 돌았다 → 조용" PASS "$(run)"; cleanup
+
+echo "=== ⭐⭐ 원장 누락 축 (2026-09-16)"
+# 다른 세션 실사용 보고: 라운드 둘을 돌리고 must_fix 13건을 반영했는데 원장 기록이 0건이었다.
+# 원인은 Skill 대신 Agent 로 리뷰어를 직접 띄운 것 — 결함은 잡혔고 **측정만 사라졌다**.
+setup s20; printf '# p\n- [x] 할일\n' > "$T/.claude/plan-active.md"   # 계획은 닫아 둔다(경고 축과 분리)
+mkdir -p "$T/.claude/review/runs/20260916-192659"
+printf '{}' > "$T/.claude/review/runs/20260916-192659/merged.json"
+out=$(run)
+case "$out" in *"원장에 없다"*) ok "① 라운드가 원장에 없으면 알린다" "알림" ;;
+               *) ng "① 원장 누락 미탐지" "알림" "$out" ;; esac
+case "$out" in *"20260916-192659"*) ok "①-b 어느 라운드인지 이름을 말한다" "이름 포함" ;;
+               *) ng "라운드 이름 누락" "이름 포함" "$out" ;; esac
+case "$out" in *'"decision"'*) ng "차단했다" "알림" "차단" ;;
+               *) ok "①-c 차단이 아니라 알림이다" "알림" ;; esac
+cleanup
+
+setup s21; printf '# p\n- [x] 할일\n' > "$T/.claude/plan-active.md"
+mkdir -p "$T/.claude/review/runs/R9" "$T/docs/리뷰-이력"
+printf '{}' > "$T/.claude/review/runs/R9/merged.json"
+printf '{"round":"R9","seats":["a"]}\n' > "$T/docs/리뷰-이력/rounds.jsonl"
+out=$(run)
+case "$out" in *"원장에 없다"*) ng "② 기록돼 있는데 알렸다" "조용" "$out" ;;
+               *) ok "② 원장에 있으면 조용하다" "조용" ;; esac
+cleanup
+
+setup s22; printf '# p\n- [x] 할일\n' > "$T/.claude/plan-active.md"
+mkdir -p "$T/.claude/review/runs"          # 디렉토리는 있고 라운드는 0개
+out=$(run)
+case "$out" in *"원장에 없다"*) ng "③ 빈 runs 에 발화했다" "조용" "$out" ;;
+               *) ok "③ ⭐ runs/ 가 비면 판정하지 않는다(「0건 누락」과 「잴 것이 없었다」는 다르다)" "조용" ;; esac
+cleanup
+
+setup s23; printf '# p\n- [x] 할일\n' > "$T/.claude/plan-active.md"
+mkdir -p "$T/.claude/review/runs/half"     # 만들다 만 자리 — 결과물이 없다
+out=$(run)
+case "$out" in *"원장에 없다"*) ng "④ 미완성 라운드에 발화했다" "조용" "$out" ;;
+               *) ok "④ 결과물(merged/candidates)이 없는 자리는 누락으로 세지 않는다" "조용" ;; esac
+cleanup
 
 setup s14; printf '# p\n- [ ] 할일\n' > "$T/.claude/plan-active.md"; printf 'x\n' > "$T/a.go"
 mkdir -p "$T/.claude/review/runs/R0"; printf '{}' > "$T/.claude/review/runs/R0/merged.json"
@@ -206,6 +249,39 @@ printf '# r\n- [ ] B 의 미해결\n' > "$T/.claude/plans/20260916-b/review.md";
 pyplain "$T/tr.jsonl" "$((NOW - 3600))"
 expect "채택한 계획도 리뷰도 없는 세션 → 남의 plans/ 리뷰는 막지 않는다" PASS "$(run)"; cleanup
 
+echo "=== ⭐⭐ 반영 주장의 「확인:」 축 (2026-09-16)"
+# 다른 세션 실사용 보고: 반영 둘이 거짓이었고 다음 단계 리뷰가 **우연히** 같은 파일을 봐서
+# 잡혔다. ⛔ 「재리뷰를 더 하자」로 풀면 사용자 결정을 어긴다 — 주장에 재는 법을 붙인다.
+setup s30
+printf '# r\n- [x] [blocker] a.go:1 — 고쳤다\n      확인: `go test ./...` 초록\n- [x] [major] b.go:2 — 고쳤다\n' \
+  > "$T/.claude/review-active.md"
+setmtime "$T/.claude/review-active.md" "$NOW"
+out=$(run)
+case "$out" in *"확인:\` 줄이 없다"*|*"확인: 줄이 없다"*|*"1 건에"*) ok "① 확인 줄이 빠진 항목을 센다" "알림" ;;
+               *) case "$out" in *"반영했다고 체크한 항목"*) ok "① 확인 줄이 빠진 항목을 센다" "알림" ;;
+                                 *) ng "① 누락 미탐지" "알림" "$out" ;; esac ;; esac
+case "$out" in *'"decision"'*) ng "차단했다" "알림" "차단" ;; *) ok "①-b 차단이 아니라 알림이다" "알림" ;; esac
+cleanup
+
+setup s31
+printf '# r\n- [x] [blocker] a.go:1 — 고쳤다\n      확인: `go test ./...` 초록\n- [x] [major] b.go:2 — 고쳤다\n      확인: 없음 — 코드를 읽어야 한다\n' \
+  > "$T/.claude/review-active.md"
+setmtime "$T/.claude/review-active.md" "$NOW"
+out=$(run)
+case "$out" in *"반영했다고 체크한 항목"*) ng "② 「없음 — 사유」를 누락으로 셌다" "조용" "$out" ;;
+               *) ok "② ⭐ 「없음 — 코드를 읽어야 한다」는 통과한다(사유를 적은 것과 빠뜨린 것은 다르다)" "조용" ;; esac
+cleanup
+
+setup s32
+# ⭐⭐ 이행기 — `확인:` 을 하나도 안 쓴 옛 형식 파일에는 조용하다.
+#   여기서 발화하면 **모든 기존 리뷰 파일이 언제나 붉고**, 그러면 아무도 안 본다.
+printf '# r\n- [x] [blocker] a.go:1 — 고쳤다\n- [x] [major] b.go:2 — 고쳤다\n' > "$T/.claude/review-active.md"
+setmtime "$T/.claude/review-active.md" "$NOW"
+out=$(run)
+case "$out" in *"반영했다고 체크한 항목"*) ng "③ 옛 형식 파일에 발화했다" "조용" "$out" ;;
+               *) ok "③ ⭐⭐ 확인 줄을 하나도 안 쓴 파일에는 조용하다(이행기)" "조용" ;; esac
+cleanup
+
 echo "=== ⑦ 사보타주 — 탐지기가 정말 그 조건을 보는가"
 # 미해결 줄을 [x] 로 바꾸면 통과해야 한다. 안 그러면 이 테스트는 다른 이유로 BLOCK 을 보고 있다.
 setup s17; printf '# r\n- [ ] 미해결\n' > "$T/.claude/review-active.md"; setmtime "$T/.claude/review-active.md" "$NOW"
@@ -214,7 +290,7 @@ setup s18; printf '# r\n- [x] 미해결\n' > "$T/.claude/review-active.md"; setm
 b2=$(verdict "$(run)"); cleanup
 [ "$b1" = "BLOCK" ] && [ "$b2" = "PASS" ] \
   && ok "체크 하나로 판정이 뒤집힌다(탐지기 생존)" "BLOCK→PASS" \
-  || ng "사보타주" "BLOCK→PASS" "$b1→$b2"
+  || ng "사보타주" "BLOCK→PASS" "${b1}→${b2}"
 
 printf '\npass=%s fail=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

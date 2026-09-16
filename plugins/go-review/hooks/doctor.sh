@@ -126,6 +126,18 @@ else
   pass "계획 ${n_plan}개 · 소유자 일치 · 미완료 ${n_left}개(게이트는 이 세션이 채택한 것만 막는다)"
 fi
 
+# ⭐ 두 형식이 **동시에** 있나 (2026-09-16 · 다른 세션 관측)
+#   레거시 `plan-active.md` 와 slug 계획 `plans/<slug>/plan.md` 가 함께 있으면 고장은 아니다 —
+#   문서가 둘 다 인식한다고 적었고 게이트도 둘 다 본다. 다만 **세션 중에 형식이 바뀌면**
+#   사람이 어느 것이 정본인지 모른다. 실제로 한 세션이 앞부분은 레거시로, 뒷부분은 slug 로
+#   진행했다. ⚠ 알리기만 한다 — 어느 쪽을 쓸지는 사람이 정할 일이다.
+_legacy=0; _slug=0
+[ -f "$ROOT/.claude/plan-active.md" ] && _legacy=1
+for _p in "$ROOT"/.claude/plans/*/plan.md; do [ -f "$_p" ] && { _slug=1; break; }; done
+if [ "$_legacy" -eq 1 ] && [ "$_slug" -eq 1 ]; then
+  warns "계획 파일이 **두 형식으로 함께** 있다(레거시 plan-active.md + plans/<slug>/plan.md) — 고장은 아니지만 어느 것이 이 세션의 정본인지 사람이 헷갈린다. 끝난 쪽을 지워라"
+fi
+
 # ── ⑥ 미해결 리뷰가 남아 있나 ───────────────────────────────────────────────
 n_rev=0; r_left=0
 for rev in ${CLAUDE_REVIEW_FILE:-} "$ROOT"/.claude/plans/*/review.md "$ROOT/.claude/review-active.md"; do

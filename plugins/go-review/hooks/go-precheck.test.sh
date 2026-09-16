@@ -506,6 +506,29 @@ got=$(CLAUDE_PLUGIN_ROOT="$SB/empty/go-review" sibling_plugin go-없는것 x/y 2
 export HOME="$HOME_ORIG"
 rm -rf "$SB"
 
+echo "=== ⭐⭐ 이 세션의 초안이 둘 이상일 때 (2026-09-16)"
+# 실측: draft_pick 이 이름순 첫 것에서 멈춰 뒤엣것이 **존재조차 보이지 않았다.**
+# 그날 승인 범위(P1~P6)는 뒤 초안의 단계 구성이었고, 안내대로 따랐으면 승인받지 않은
+# 계획을 착수했을 것이다. ⚠ 고르는 것을 막지 않는다 — 위험한 것은 **조용한 것**이다.
+setup
+mkdir -p "$T/.claude/plans/20260916-aaa" "$T/.claude/plans/20260916-zzz"
+printf '%s' "$DRAFT" > "$T/.claude/plans/20260916-aaa/draft.md"
+printf '%s' "$DRAFT" > "$T/.claude/plans/20260916-zzz/draft.md"
+setmtime "$T/.claude/plans/20260916-aaa/draft.md" "$NOW"
+setmtime "$T/.claude/plans/20260916-zzz/draft.md" "$NOW"
+out=$(run "/go-review:go P1~P6")
+printf '%s' "$out" | grep -q '이 세션의 초안이 더 있다' && ok "① 나머지 초안이 있다고 말한다" || ng "둘째 초안 침묵" "$out"
+printf '%s' "$out" | grep -q 'zzz' && ok "①-b 어느 것인지 이름을 말한다" || ng "이름 누락" "$out"
+printf '%s' "$out" | grep -q '계획 초안 있음' && ok "①-c 그래도 하나를 지목한다(착수를 막지 않는다)" || ng "지목 실패" "$out"
+cleanup
+
+setup
+printf '%s' "$DRAFT" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go-review:go 전부")
+printf '%s' "$out" | grep -q '이 세션의 초안이 더 있다' && ng "② 초안 하나인데 알렸다" "$out" \
+  || ok "② 대조군 — 초안이 하나면 조용하다"
+cleanup
+
 echo "=== ⭐⭐ 위임 판정 격자 축 (2026-09-16)"
 # plan.md §6-b 2단계가 항목마다 격자 판정을 요구한다. 이 축은 **세기만** 한다 —
 # 차단하지 않는 것이 규약이고, 「명세부터」 갈래가 나와도 통과시켜야 한다(그것도 정상 판정이다).

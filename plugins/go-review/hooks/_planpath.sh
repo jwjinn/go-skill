@@ -314,10 +314,22 @@ EOF
 #   ⚠ 초안은 미완료 수를 보지 않는다(초안은 다 미완료다). 판별 불가(rc 2)도 채택으로 본다.
 draft_pick() {
   _dp_base="$1"; _dp_tr="$2"; _dp_picked=''
+  # ⭐⭐ **첫 것에서 멈추지 않는다**(2026-09-16 실측). 종전에는 `break` 로 끝냈는데, 한 세션이
+  #   초안을 둘 이상 가지면 **이름순 뒤엣것이 존재조차 보이지 않았다.** 둘 다 이 세션의 것이라
+  #   `foreign:` 으로도 안 나온다.
+  #   실제로 그날 승인 범위(`P1~P6`)는 뒤 초안의 단계 구성이었는데 앞 초안이 지목됐다 —
+  #   그대로 따랐으면 **승인받지 않은 계획을 착수했을 것이다.**
+  #   ⇒ 여전히 첫 것을 돌려주되(호출부 계약을 바꾸지 않는다) **나머지를 stderr 로 알린다.**
+  #     자동 선택이 위험한 이유는 고르는 것 자체가 아니라 **조용한 것**이다.
   while IFS= read -r _dp_f; do
     [ -n "$_dp_f" ] && [ -f "$_dp_f" ] || continue
     plan_session_claims "$_dp_tr" "$(plan_claim_name "$_dp_f")"; _dp_rc=$?
-    if [ "$_dp_rc" -ne 1 ]; then _dp_picked="$_dp_f"; break; fi
+    if [ "$_dp_rc" -ne 1 ]; then
+      if [ -z "$_dp_picked" ]; then _dp_picked="$_dp_f"
+      else printf 'alsomine:%s\n' "$_dp_f" >&2
+      fi
+      continue
+    fi
     printf 'foreign:%s\n' "$_dp_f" >&2
   done <<EOF
 $(draft_candidates "$_dp_base")
