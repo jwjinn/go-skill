@@ -413,6 +413,21 @@ uq "go 호출만 있고 Write 0 → slug 계획은 채택 아님 → 알림(둘 
 # … 같은 기록이라도 레거시 plan-active.md 가 있으면 그것은 go 호출로 채택된다(종전 동작 유지)
 printf -- '- [ ] 레거시 일\n' > "$UQ/.claude/plan-active.md"; touch_at "$UQ/.claude/plan-active.md" "$T_NEW"
 uq "go 호출만 + 레거시 존재 → 레거시만 차단(slug 는 섞이지 않는다)" "$UQ/tr-goonly.jsonl" s-uq7 BLOCK "plan-active.md" "20260916-"
+# ⛔⛔ 이어하기 요약은 사람 발화가 아니다(2026-09-16 실측이 잡았다). 대화가 길어지면 하네스가
+#   「This session is being continued…」 요약을 user 행으로 넣고, 그 요약은 지난 대화를 인용하므로
+#   `/go` 문자열이 들어 있다. 그것을 세면 go 를 부른 적 없는 세션이 레거시 계획의 주인이 된다.
+{ printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_o}.000Z\",\"message\":{\"content\":\"This session is being continued from a previous conversation that ran out of context. 이전 요약: 사용자가 <command-name>/go-review:go</command-name> 를 불렀고 …\"}}"
+} > "$UQ/tr-resume.jsonl"
+uq "이어하기 요약의 인용은 채택이 아니다 → 알림(남의 것)" "$UQ/tr-resume.jsonl" s-uq8 WARN
+# ⭐ 대조군 — 긴 문서 한가운데의 인용도 채택이 아니다(앞머리에서만 인정한다)
+{ printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_o}.000Z\",\"message\":{\"content\":\"$(printf 'x%.0s' $(seq 1 500)) 그리고 /go-review:go 라고 적혀 있었다\"}}"
+} > "$UQ/tr-midquote.jsonl"
+uq "문서 한가운데의 인용도 채택이 아니다" "$UQ/tr-midquote.jsonl" s-uq9 WARN
+# ⭐ 반대 방향 — 진짜 호출(앞머리)은 그대로 채택이다
+{ printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_o}.000Z\",\"message\":{\"content\":\"<command-name>/go-review:go</command-name>\n<command-message>go</command-message>\"}}"
+} > "$UQ/tr-realgo.jsonl"
+uq "앞머리의 진짜 호출은 레거시 계획을 채택한다" "$UQ/tr-realgo.jsonl" s-uq10 BLOCK "plan-active.md"
+
 # 환경 지정은 파일을 좁힌다 — 그 파일을 채택했으면 차단
 o=$(CLAUDE_PLAN_FILE="$UQ/.claude/plans/20260916-mine/plan.md" printf '{"session_id":"s-uq5","transcript_path":"%s","stop_hook_active":false}' "$UQ/tr-mine.jsonl" | CLAUDE_PLAN_FILE="$UQ/.claude/plans/20260916-mine/plan.md" CLAUDE_PROJECT_DIR="$UQ" bash "$H")
 chk "CLAUDE_PLAN_FILE 로 좁힌 내 계획 → 차단" "$o" '"block"' yes

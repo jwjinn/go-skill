@@ -185,9 +185,20 @@ plan_session_claims() {   # <transcript> <파일 basename …>
                | if type=="string" then .
                  elif type=="array" then (map(select(.type=="text") | (.text // "")) | join("\n"))
                  else "" end);
-    def go_call: (text
+    # ⛔⛔ **이어하기 요약은 사람 발화가 아니다**(2026-09-16 실측). 대화가 길어지면 하네스가
+    #   「This session is being continued…」로 시작하는 요약을 user 행으로 넣는데, 그 요약은
+    #   지난 대화를 **인용**하므로 `/go` 문자열이 그대로 들어 있다. 그것을 세면 go 를 부른 적
+    #   없는 세션이 레거시 계획의 주인이 된다 — 실제로 이 세션이 그렇게 남의 계획에 막혔다.
+    #   같은 부류를 오늘만 두 번째 밟았다(Bash 재지향 · `5b29ada`). 자기 문맥이 자기 근거가
+    #   되는 자리는 전부 의심해야 한다.
+    # ⇒ ① 이어하기 요약 행은 제외한다 ② go 호출은 **프롬프트 앞머리**에서만 인정한다.
+    #   실제 호출은 `<command-name>…` 이 첫 줄이다. 긴 문서 한가운데의 인용은 호출이 아니다.
+    def is_resume: (text | test("^This session is being continued from a previous conversation")
+                         or test("^이 세션은 이전 대화에서 이어집니다"));
+    def head: (text | .[0:400]);
+    def go_call: ((is_resume | not) and (head
                | test("<command-name>/go(-review:go|-review:review-loop)?</command-name>")
-                 or test("(^|\n)[[:space:]]*/go(-review:go|-review:review-loop)?([[:space:]]|$)"));
+                 or test("(^|\n)[[:space:]]*/go(-review:go|-review:review-loop)?([[:space:]]|$)")));
     def names: ($names | split(" "));
     # ⭐⭐ 고유화(2026-09-16 실증이 잡았다) — 「/go 를 불렀다」·「Skill go-review:go 를 썼다」는 흔적은
     #   **레거시 단일 자리**(이름에 / 가 없는 plan-active.md 류)에만 채택이다. 그 자리는 워크트리에 하나라
