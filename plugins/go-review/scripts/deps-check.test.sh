@@ -116,7 +116,9 @@ echo "=== ⭐⭐ 사보타주 ⑦ jq 부재 시 Stop 게이트가 **침묵하지
 BIN=$(mkbin "git python3")   # jq 없음
 P=$(mktemp -d); mkdir -p "$P/.claude"
 printf '# 계획\n작업 위치: %s\n- [ ] 하나\n- [ ] 둘\n' "$P" > "$P/.claude/plan-active.md"
-printf '{"type":"user","timestamp":"2020-01-01T00:00:00.000Z","message":{"role":"user","content":"해줘"}}\n' > "$P/t.jsonl"
+# ⚠ 계획 게이트는 2026-09-16 부터 「이 세션이 그 계획을 **채택**했나」를 본다 — 픽스처의 사람
+#   프롬프트가 go 호출이어야 차단 기대가 성립한다(아니면 남의 계획으로 보고 알림만 낸다).
+printf '{"type":"user","timestamp":"2020-01-01T00:00:00.000Z","message":{"role":"user","content":"<command-name>/go-review:go</command-name>"}}\n' > "$P/t.jsonl"
 IN="{\"session_id\":\"s1\",\"transcript_path\":\"$P/t.jsonl\"}"
 for h in plan-file-gate todo-completion-gate review-gate; do
   out=$(printf '%s' "$IN" | PATH="$BIN" CLAUDE_DEPS_NOTICE_TTL=0 CLAUDE_PROJECT_DIR="$P" bash "$ROOT/hooks/$h.sh" 2>&1)
@@ -145,7 +147,9 @@ echo "=== ⑧ 알림 TTL — 같은 말을 매 턴 반복하지 않는다"
 BIN=$(mkbin "git python3")
 P=$(mktemp -d); mkdir -p "$P/.claude"
 printf '# 계획\n작업 위치: %s\n- [ ] 하나\n' "$P" > "$P/.claude/plan-active.md"
-printf '{"type":"user","timestamp":"2020-01-01T00:00:00.000Z","message":{"role":"user","content":"해줘"}}\n' > "$P/t.jsonl"
+# ⚠ 계획 게이트는 2026-09-16 부터 「이 세션이 그 계획을 **채택**했나」를 본다 — 픽스처의 사람
+#   프롬프트가 go 호출이어야 차단 기대가 성립한다(아니면 남의 계획으로 보고 알림만 낸다).
+printf '{"type":"user","timestamp":"2020-01-01T00:00:00.000Z","message":{"role":"user","content":"<command-name>/go-review:go</command-name>"}}\n' > "$P/t.jsonl"
 IN="{\"session_id\":\"s1\",\"transcript_path\":\"$P/t.jsonl\"}"
 rm -f "${TMPDIR:-/tmp}"/claude-go-deps-jq-* 2>/dev/null || true
 o1=$(printf '%s' "$IN" | PATH="$BIN" CLAUDE_PROJECT_DIR="$P" bash "$ROOT/hooks/plan-file-gate.sh" 2>&1)

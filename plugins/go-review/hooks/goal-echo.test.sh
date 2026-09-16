@@ -176,6 +176,25 @@ printf '%s' "$out" | grep -q '남은 항목 1/2' && ok "⭐⭐ 결정 절 체크
 printf '%s' "$out" | grep -q '열린 항목 2건' && ok "대신 「열린 결정」으로 따로 말한다" || ng "열린 결정 경고" "$out"
 cleanup
 
+echo "=== ⭐⭐ 세션 스코프 — 남의 계획은 되읽지 않는다 (2026-09-16)"
+# 완주 게이트와 **같은** 무장 조건이어야 한다(같은 사실을 두 훅이 다르게 알면 안 된다).
+runtr(){ # $1=프롬프트 $2=transcript 경로
+  printf '{"session_id":"%s","prompt":"%s","transcript_path":"%s"}' "$SESS" "$1" "$2" \
+    | CLAUDE_PROJECT_DIR="$T" bash "$HOOK" 2>/dev/null; }
+setup s20; printf '%s' "$PLAN_OK" > "$T/.claude/plan-active.md"; setmtime "$T/.claude/plan-active.md" "$NOW"
+printf '%s\n' '{"type":"user","message":{"content":"해줘"}}' > "$T/plain.jsonl"
+out=$(runtr "뭐 좀 해줘" "$T/plain.jsonl"); [ -z "$out" ] && ok "채택 흔적 없는 세션 → 무출력(남의 계획)" || ng "남의 계획 되읽음" "$out"
+out=$(runtr "<command-name>/go-review:go</command-name>" "$T/plain.jsonl")
+printf '%s' "$out" | grep -q '리뷰 루프를 붙여줘' && ok "지금 프롬프트가 go 호출이면 그 턴부터 되읽는다" || ng "go 프롬프트" "$out"
+printf '%s\n' '{"type":"user","message":{"content":"<command-name>/go-review:go</command-name>"}}' > "$T/go.jsonl"
+out=$(runtr "계속" "$T/go.jsonl"); printf '%s' "$out" | grep -q '리뷰 루프를 붙여줘' && ok "채택한 세션 → 되읽는다" || ng "채택 세션" "$out"
+printf '%s\n' '{"type":"user","message":{"content":"해줘"}}' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/w/.claude/plan-active.md","old_string":"a","new_string":"b"}}]}}' > "$T/edit.jsonl"
+out=$(runtr "계속" "$T/edit.jsonl"); printf '%s' "$out" | grep -q '리뷰 루프를 붙여줘' && ok "계획 파일을 쓴 세션 → 되읽는다" || ng "Edit 세션" "$out"
+out=$(runtr "계속" "$T/없는것.jsonl"); printf '%s' "$out" | grep -q '리뷰 루프를 붙여줘' && ok "transcript 부재(판별 불가) → 종전대로 되읽는다" || ng "판별 불가" "$out"
+printf '%s\n' '{"type":"user","message":{"content":"<command-name>/go-review:plan</command-name>"}}' > "$T/plan.jsonl"
+out=$(runtr "계속" "$T/plan.jsonl"); [ -z "$out" ] && ok "대조군: /go-review:plan 은 채택이 아니다" || ng "plan 호출" "$out"
+cleanup
+
 echo "=== 사보타주 — 탐지기가 정말 미완료를 보는가"
 setup s9; printf '%s' "$PLAN_OK" > "$T/.claude/plan-active.md"; setmtime "$T/.claude/plan-active.md" "$NOW"
 a=$(run); cleanup

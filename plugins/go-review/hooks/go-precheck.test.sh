@@ -39,6 +39,22 @@ out=$(run "<command-name>/go</command-name>
 printf '%s' "$out" | grep -q '승인할 계획이 없다' && ok "래핑된 /go + 초안 없음 → 경고" || ng "래핑 /go" "$out"
 cleanup
 
+echo "=== ⭐ 플러그인 이름 — 실제 호출 표기 /go-review:go 에도 발화한다 (2026-09-16)"
+# 2026-09-16 실측: 플러그인으로 로드된 뒤 프롬프트는 `<command-name>/go-review:go</command-name>` 로
+# 실리는데 이 훅은 `/go` 만 봐서 실사용에서 한 번도 발화하지 않았다. 대조군이 옛 표기만 잠갔던 탓이다.
+setup
+out=$(run "<command-message>go-review:go</command-message>
+<command-name>/go-review:go</command-name>
+<command-args></command-args>")
+printf '%s' "$out" | grep -q '승인할 계획이 없다' && ok "래핑된 /go-review:go + 초안 없음 → 경고" || ng "래핑 /go-review:go" "$out"
+out=$(run "/go-review:go 전부")
+printf '%s' "$out" | grep -q '승인할 계획이 없다' && ok "원문 /go-review:go → 경고" || ng "원문 /go-review:go" "$out"
+out=$(run "<command-name>/go-review:plan</command-name>")
+[ -z "$out" ] && ok "대조군: /go-review:plan 에는 말하지 않는다" || ng "plan 오발화" "$out"
+out=$(run "<command-name>/go-review:review-loop</command-name>")
+[ -z "$out" ] && ok "대조군: /go-review:review-loop 에는 말하지 않는다" || ng "review-loop 오발화" "$out"
+cleanup
+
 echo "=== 초안이 있을 때 — 「그대로 옮겨라」를 말해야 한다"
 setup; printf '%s' "$DRAFT" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
 out=$(run "/go 전부")

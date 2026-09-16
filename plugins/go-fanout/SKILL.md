@@ -677,8 +677,21 @@ bash ~/.claude/skills/go-fanout/wave-close.sh --run <run_id> \
 워커가 없고**, **회수되지 않은 자원이 있다**.
 
 ```bash
-bash ~/.claude/skills/go-fanout/wave-close-gate.test.sh   # 대조군 12검사
+bash ~/.claude/skills/go-fanout/wave-close-gate.test.sh   # 대조군 29검사
 ```
+
+⭐⭐ **이 세션이 관여한 run 만 막는다**(2026-09-16). 훅을 점검하던 세션이 지난 사흘의 파도 세
+차수(잔여 컨텍스트 11개)로 매 턴 막혔고, 그 세션은 그 run 을 띄운 적이 없었다. 판별은
+transcript 의 **도구 호출 입력과 도구 결과**다 — 코디네이터는 run_id 를 `--run …` 이나
+`worker-list` 출력으로 반드시 만나고, 인계로 이어받은 세션도 `worker-list` 를 한 번 부르면
+그때부터 막힌다. ⚠ 모델이 **산문에 인용한** run_id 는 세지 않는다(한 번 막힌 세션이 그것을
+답변에 적으면 자기 출력이 자기 근거가 된다 · 대조군 t18-b). ⚠ transcript 를 못 읽으면
+**종전대로 전부 본다**.
+
+⚠⚠ **코디네이터가 닫을 수 없는 자원은 미회수로 세지 않는다.** `worker-release --help` 의 Notes 가
+그 목록을 말한다 — 재사용·기존 터미널(`external_terminal`) · 사람이 인수한 터미널
+(`user_takeover`) · 증명되지 않은 신원(`identity_unproven`). 그 셋만 면제하고 **넓히지 않는다**:
+여기 없는 사유는 닫을 수 있다는 뜻이고, 모르는 사유를 면제하면 게이트가 조용히 꺼진다.
 
 ⚠ 등록은 **스킬 경로를 그대로** 가리켜라(`bash "$HOME/.claude/skills/go-fanout/wave-close-gate.sh"`).
 레포에 사본을 두면 정본이 둘이 되고 **그 사본이 워커 워크트리로 퍼진다** — 2026-09-15 에

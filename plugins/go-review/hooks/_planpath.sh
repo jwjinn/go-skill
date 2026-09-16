@@ -138,3 +138,66 @@ plan_boxes_excluding_decisions() {
     want=="all"  && /^[[:space:]]*[-*+][[:space:]]+\[.\]/    { n++ }
   END { print n+0 }' "$1" 2>/dev/null
 }
+
+# ── 세션 스코프 — 이 세션이 그 파일을 「자기 것」으로 삼았나 (2026-09-16) ─────────────
+#
+# ⭐⭐ 왜 생겼나: 계획 파일은 **워크트리에 하나**다. 같은 워크트리에서 세션 A 가 계획을 진행하는
+#   동안 세션 B 가 별건(예: 훅 점검)을 하면, B 의 Stop 마다 완주 게이트가 A 의 미완료로 B 를
+#   막았다(2026-09-16 실측 — B 는 계획 파일을 한 번도 쓰지 않았고 go-review:go 도 부르지 않았다).
+#   낡음 판별(계획 mtime ↔ 세션 첫 발화)은 「세션 시작 전 잔재」만 걸러서 이 경우를 못 본다.
+#   게이트가 재려던 것은 「승인받은 계획을 완주했나」이고, 승인은 **세션이 한 행위**다. 그래서
+#   그 행위의 흔적을 transcript 에서 본다.
+#
+# 흔적 셋 — 어느 하나면 채택이다:
+#   ① 사람 프롬프트의 go 체인 호출 — `<command-name>/go-review:go</command-name>` ·
+#      `<command-name>/go</command-name>` · 원문 `/go …` · (리뷰 파일용) `…/go-review:review-loop`
+#   ② `Skill` 도구로 `go-review:go` · `go-review:review-loop` 호출
+#   ③ 그 파일을 **쓴** 도구 호출 — Write/Edit/MultiEdit 의 file_path, 또는 Bash 의 `> <파일>` 재지향.
+#      ⚠ 읽기(`cat`·`head`·`grep`)는 채택이 아니다 — 점검하는 세션이 딱 그것을 한다.
+#   ⚠ `/go-review:plan` 은 채택이 아니다(초안을 만드는 단계다).
+#
+# 반환: 0 = 채택 흔적 있음(무장) · 1 = 사람 발화는 있는데 흔적 없음(남의 것) ·
+#       2 = 판별 불가(transcript 부재·읽기 실패·사람 발화 0·jq 없음)
+# ⚠⚠ 호출부는 2 를 **0 처럼** 다뤄라 — 모르는 것을 근거로 게이트를 열지 않는다(기존 규약).
+#
+# ⚠ 한계를 알고 써라: ③은 **파일 이름**(basename)으로 맞춘다. 같은 세션이 앞 계획을 채택했다면
+#   같은 워크트리의 다음 계획(같은 이름)도 채택한 것으로 본다 — 이름이 같은 파일을 두 번 쓰는
+#   세션은 실제로 그 계획을 이어 쓰는 세션이므로 오탐 비용은 작다.
+plan_session_claims() {   # <transcript> <파일 basename …>
+  _sc_tr="$1"; shift
+  command -v jq >/dev/null 2>&1 || return 2
+  [ -n "$_sc_tr" ] && [ -f "$_sc_tr" ] || return 2
+  _sc_names=""
+  for _sc_n in "$@"; do _sc_names="$_sc_names $_sc_n"; done
+  _sc_names="${_sc_names# }"
+  [ -n "$_sc_names" ] || return 2
+  _sc_out=$(jq -rR --arg names "$_sc_names" '
+    def human: (.type=="user" and (has("toolUseResult")|not) and (.isMeta != true));
+    def text: (.message.content
+               | if type=="string" then .
+                 elif type=="array" then (map(select(.type=="text") | (.text // "")) | join("\n"))
+                 else "" end);
+    def go_call: (text
+               | test("<command-name>/go(-review:go|-review:review-loop)?</command-name>")
+                 or test("(^|\n)[[:space:]]*/go(-review:go|-review:review-loop)?([[:space:]]|$)"));
+    def names: ($names | split(" "));
+    def hits_name($p): (names | any(. as $n | ($p == $n) or ($p | endswith("/" + $n))));
+    def redirect_writes: (.input.command // "" | . as $c
+               | names | any(. as $n | $c | test(">>?[[:space:]]*[^[:space:]|;&]*" + ($n | gsub("\\."; "\\.")))));
+    def claims_tool: (.type=="assistant" and any(.message.content[]?;
+        .type=="tool_use" and (
+          (.name=="Skill" and ((.input.skill // "") | test("^go-review:(go|review-loop)$")))
+          or ((.name=="Write" or .name=="Edit" or .name=="MultiEdit") and hits_name(.input.file_path // ""))
+          or (.name=="Bash" and redirect_writes)
+        )));
+    fromjson?
+    | if (human and go_call) or claims_tool then "yes"
+      elif human then "human"
+      else empty end
+  ' "$_sc_tr" 2>/dev/null | sort -u | tr '\n' ' ')
+  case " $_sc_out" in
+    *" yes "*)   return 0 ;;
+    *" human "*) return 1 ;;
+    *)           return 2 ;;
+  esac
+}

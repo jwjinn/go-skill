@@ -72,6 +72,14 @@ fi
 review="${CLAUDE_REVIEW_FILE:-$root/.claude/review-active.md}"
 plan="${CLAUDE_PLAN_FILE:-$root/.claude/plan-active.md}"
 
+# ⭐ 세션 스코프(2026-09-16) — 채택 흔적 판별은 공용 함수다(`_planpath.sh`). 근거는
+#   plan-file-gate.sh 의 같은 절. 여기서는 두 축 모두 「이 세션이 그 파일을 채택했나」를 먼저 본다.
+. "$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/_planpath.sh" 2>/dev/null || true
+claims() { # <파일> → rc 0 채택 · 1 남의 것 · 2 판별 불가(=채택으로 다룬다)
+  command -v plan_session_claims >/dev/null 2>&1 || return 0
+  plan_session_claims "$transcript" "$(basename "$1")"
+}
+
 # ── 공통 헬퍼 ────────────────────────────────────────────────────────────────
 epoch_of() {  # ISO8601(UTC) → epoch. BSD·GNU date 양쪽을 시도한다.
   b="${1%%.*}"; b="${b%Z}"
@@ -136,7 +144,10 @@ if [ -f "$review" ]; then
     # ⚠⚠ 판별 불가(둘 중 하나라도 못 구함)는 **차단 유지**다.
     #    모르는 것을 근거로 게이트를 열면 게이트가 통째로 무력화된다.
 
-    if [ "$stale" -eq 0 ] && under_cap; then
+    claims "$review"; r_claim=$?
+    # ⚠ 남의 리뷰 파일(이 세션이 review-loop 도 /go 도 부르지 않았고 그 파일을 쓰지도 않았다)은
+    #   막지 않는다. 판별 불가(2)는 종전대로 막는다.
+    if [ "$r_claim" -ne 1 ] && [ "$stale" -eq 0 ] && under_cap; then
       list=$(grep -nE '^[[:space:]]*[-*+][[:space:]]+\[.\]' "$review" 2>/dev/null \
              | grep -vE '\[[xX]\]' \
              | sed -e 's/^\([0-9]*\):[[:space:]]*[-*+][[:space:]]*/  \1: /' \
@@ -193,6 +204,10 @@ case "$p_done"  in ''|*[!0-9]*) p_done=0 ;; esac
 #     `?? backend/internal/foo/` 가 되어 확장자 정규식에 걸리지 않는다 → 새 슬라이스를 통째로
 #     만든, **가장 리뷰가 필요한 순간에 탐지기가 0 을 돌려준다**. 원 레포의 대표 실패 부류
 #     (「0 이 나오면 탐지기부터 의심하라」)를 이 훅이 그대로 재현할 뻔했다.
+# ⭐ 경고 축도 세션 스코프다 — 남의 계획이 활성인 워크트리에서 별건 코드를 고친 세션에
+#   「리뷰가 안 돌았다」고 하면 그 안내는 틀린 사유다.
+claims "$plan"; p_claim=$?
+[ "$p_claim" -ne 1 ] || exit 0
 changed=$(cd "$root" 2>/dev/null && git status --porcelain -uall 2>/dev/null \
           | grep -cE '\.(go|ts|tsx|js|jsx|py|lua|sh|sql|ya?ml)$' || printf '0')
 case "$changed" in ''|*[!0-9]*) changed=0 ;; esac

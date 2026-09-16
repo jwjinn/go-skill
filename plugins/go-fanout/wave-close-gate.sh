@@ -29,6 +29,27 @@ MAX="${CLAUDE_WAVE_CLOSE_GATE_MAX:-8}"
 STAMP="${TMPDIR:-/tmp}/wave-close-gate.$(id -u).count"
 ORCA_BIN="${ORCA_BIN:-orca}"
 
+# ⭐⭐ 세션 스코프 (2026-09-16) — **이 세션이 관여한 run** 만 막는다.
+#   실측: 훅을 점검하던 세션이 지난 사흘의 fan-out 세 차수(잔여 컨텍스트 11개)로 매 턴 막혔다.
+#   그 세션은 그 run 을 띄우지도 본 적도 없었다. 판별은 transcript 다 — 코디네이터는 run_id 를
+#   도구 호출(`--run …`)이나 도구 결과(`worker-list` 출력)로 반드시 만난다. 인계로 코디네이션을
+#   이어받은 세션도 `worker-list` 를 한 번 부르면 그때부터 막힌다(인계문이 그것을 시킨다).
+#   ⚠ **사람 발화 행은 보지 않는다** — 이 게이트의 차단 문구 자체가 사람 발화 행으로 transcript 에
+#     남으므로, 그것을 세면 한 번 막힌 세션은 영원히 「관여한 세션」이 된다.
+#   ⚠ stdin 이 없거나 transcript 를 못 읽으면 **종전대로 전부 본다**(판별 불가로 게이트를 좁히지 않는다).
+#   ⚠⚠ 읽기에 **시간 상한**을 둔다. `cat` 으로 받으면 stdin 이 열린 채로 넘어온 호출에서 훅이
+#     영영 멈추고, 그것은 게이트가 아니라 **턴이 서는** 것이다(2026-09-16 자기 대조군 t4 에서 재현).
+IN=''
+if [ ! -t 0 ]; then
+  #   ⚠ 마지막 줄에 개행이 없으면 `read` 는 **0 이 아닌 값을 돌려주면서 데이터는 담아 준다** —
+  #     그 경우를 안 받으면 개행 없는 JSON 한 줄이 통째로 버려진다(실측: 대조군 t17 이 잡았다).
+  IN=$( { while IFS= read -r -t "${CLAUDE_WAVE_STDIN_TIMEOUT:-2}" _l || [ -n "$_l" ]; do printf '%s\n' "$_l"; _l=''; done; } 2>/dev/null )
+fi
+TR=''
+if [ -n "$IN" ] && command -v jq >/dev/null 2>&1; then
+  TR=$(printf '%s' "$IN" | jq -r '.transcript_path // ""' 2>/dev/null || true)
+fi
+
 command -v "$ORCA_BIN" >/dev/null 2>&1 || exit 0          # ①
 
 WL="$("$ORCA_BIN" orchestration worker-list --json 2>/dev/null)" || exit 0
@@ -80,7 +101,15 @@ for w in ws:
     #   `retainedReason: "user_takeover"` 로 남았고, `worker-release` 를 다시 불러도 같은
     #   사유만 돌아왔다. 워크트리는 사라졌으니 「자원이 살아 있다」도 사실이 아니다.
     #   ⇒ 그 사유는 **사람 몫**으로 빼고 세지 않는다. 대신 아래에서 한 줄로 알린다.
-    if held and str(res.get("retainedReason") or "") in ("user_takeover",):
+    #   ⚠⚠ 사유가 **셋**이다(2026-09-16 실측 — 처음엔 하나만 적어 두 사유가 계속 막았다).
+    #     `worker-release --help` 의 Notes 가 못 닫는 것을 열거한다: "Never closes setup
+    #     terminals, configured tabs, reused or pre-existing terminals, user-taken-over
+    #     terminals, or unproven identities." 그것이 각각 external_terminal ·
+    #     user_takeover · identity_unproven 으로 돌아온다. 하나만 면제하면 나머지 둘이
+    #     세션당 상한 여덟 번을 소음으로 태운다 — 실측으로 run 둘이 그 상태였다.
+    #   ⚠ 목록을 **넓히지 마라.** 여기 없는 사유는 코디네이터가 닫을 수 있다는 뜻이고,
+    #     모르는 사유를 면제하면 게이트가 조용히 꺼진다(대조군 t15 가 그것을 잠근다).
+    if held and str(res.get("retainedReason") or "") in ("user_takeover", "external_terminal", "identity_unproven"):
         held = False
         a_tk = runs.setdefault(r, {"live": 0, "held": [], "n": 0, "takeover": []})
         a_tk.setdefault("takeover", []).append(w.get("dispatchId"))
@@ -97,6 +126,29 @@ print("\n".join(out))
 ' 2>/dev/null) || exit 0
 
 [ -n "$OPEN" ] || { : > "$STAMP"; exit 0; }
+# ⭐ 세션 스코프 — 이 세션의 도구 호출·도구 결과에 run_id 가 없으면 그 run 은 이 세션의 일이 아니다.
+if [ -n "$TR" ] && [ -f "$TR" ] && command -v jq >/dev/null 2>&1; then
+  # ⚠ **모델이 쓴 산문은 보지 않는다** — 도구 호출의 입력과 도구 결과만 본다.
+  #   이 게이트에 한 번 막힌 세션은 그 run_id 를 답변에 인용하게 되고, 산문까지 세면 그 인용이
+  #   다음 턴의 「관여」 근거가 된다(자기 출력을 자기 근거로 삼는 부류 · 대조군 t18-b).
+  SEEN="$(jq -rR 'fromjson?
+      | if .type=="assistant" then (.message.content[]? | select(.type=="tool_use") | .input | tostring)
+        elif (.type=="user" and has("toolUseResult")) then (.toolUseResult | tostring)
+        else empty end' "$TR" 2>/dev/null || true)"
+  MINE=''
+  while IFS=$'\t' read -r run held total ids; do
+    [ -n "$run" ] || continue
+    if printf '%s' "$SEEN" | grep -qF -- "$run"; then
+      MINE="${MINE}${run}	${held}	${total}	${ids}
+"
+    fi
+  done <<EOF
+$OPEN
+EOF
+  OPEN="${MINE%"
+"}"
+  [ -n "$OPEN" ] || exit 0          # 남의 run 뿐이다 — 스탬프는 건드리지 않는다(그쪽 세션의 셈이다)
+fi
 
 # ⭐⭐ 보류 표식이 있으면 조용히 통과한다 (2026-09-15).
 #   `wave-close.sh` 가 **재 보고** 「막힌 것이 사람을 기다리는 사유 하나뿐」일 때만 남기는 파일이다.

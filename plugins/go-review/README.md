@@ -161,6 +161,26 @@ git push
 2. 한 트리를 고집해야 하면 세션마다 `CLAUDE_PLAN_FILE` · `CLAUDE_REVIEW_FILE` 를 지정해 띄운다.
 3. 그 계획을 끝내거나 파일을 지운다(끝났으면 지우는 것이 규약이다).
 
+### ⭐⭐ 2026-09-16 — 게이트가 **이 세션이 채택한 계획만** 막는다
+
+위 안내는 계속 유효하지만, 가장 잦은 경우 하나는 이제 도구가 스스로 가른다. 같은 워크트리에서
+세션 A 가 계획을 진행하는 동안 세션 B 가 **별건**을 하면(예: 훅을 점검한다), B 는 A 의 미완료로
+매 턴 막혔다. 낡음 판별은 그것을 못 본다 — 계획이 B 의 시작 뒤에도 갱신되기 때문이다.
+
+게이트가 재려던 것은 「승인받은 계획을 완주했나」이고 **승인은 세션이 한 행위**다. 그래서 그
+행위의 흔적을 transcript 에서 본다. 어느 하나면 채택이다:
+
+- 사람 프롬프트의 go 호출 — `/go-review:go` · `/go` (원문·`<command-name>` 래핑 둘 다)
+- `Skill` 도구로 `go-review:go` · `go-review:review-loop` 호출
+- 그 파일을 **쓴** 도구 — `Write`/`Edit`/`MultiEdit`, 또는 Bash 의 `> <파일>` 재지향
+
+읽기(`cat`·`grep`)는 채택이 아니다 — 점검하는 세션이 딱 그것을 한다. `/go-review:plan` 도
+채택이 아니다(초안을 만드는 단계다). 판별 불가(transcript 부재·사람 발화 0)는 **차단 유지**다.
+
+남의 계획일 때는 막지 않되 **세션당 한 번** 그 사실을 알린다. 조용한 통과와 검사한 통과는 다르다.
+같은 판별을 `goal-echo.sh`(목표 재주입)와 `review-gate.sh`(리뷰 반영·경고 축)도 쓴다 — 같은
+사실을 세 훅이 다르게 알면 안 되기 때문이다.
+
 **절대 하지 마라**: 남의 계획을 `[x]` 로 위장하거나 줄을 지우는 것. 그 세션의 완주 추적이
 사라지고, 그쪽은 자기 작업이 왜 게이트에서 빠졌는지 알 수 없다.
 
@@ -295,7 +315,7 @@ bash review/eval/eval.sh score review/eval/cases/universal.jsonl runs/cx-1 codex
 차단과 경고를 가르는 기준: **근거가 명확하면 차단, 판정이 애매하면 경고.**
 거부하는 검사에서 오탐 비용이 미탐보다 즉각적이기 때문이다.
 
-## 게이트 자신의 테스트 — 14스위트 402검사
+## 게이트 자신의 테스트 — 14스위트 439검사
 
 ```bash
 for t in hooks/*.test.sh review/*.test.sh review/eval/*.test.sh scripts/*.test.sh; do
@@ -307,10 +327,10 @@ bash hooks/doctor.sh --stamp    # 통과했다고 표시한다(세션 시작 진
 | 스위트 | 검사 | 스위트 | 검사 |
 |---|---|---|---|
 | `hooks/doctor.test.sh` | 19 | `review/config.test.sh` | 53 |
-| `hooks/go-precheck.test.sh` | 46 | `review/dedup.test.sh` | 24 |
-| `hooks/goal-echo.test.sh` | 26 | `review/measure.test.sh` | 25 |
-| `hooks/plan-file-gate.test.sh` | 40 | `review/scope.test.sh` | 19 |
-| `hooks/review-gate.test.sh` | 21 | `review/verdict.test.sh` | 29 |
+| `hooks/go-precheck.test.sh` | 57 | `review/dedup.test.sh` | 24 |
+| `hooks/goal-echo.test.sh` | 32 | `review/measure.test.sh` | 25 |
+| `hooks/plan-file-gate.test.sh` | 55 | `review/scope.test.sh` | 19 |
+| `hooks/review-gate.test.sh` | 26 | `review/verdict.test.sh` | 29 |
 | `hooks/todo-completion-gate.test.sh` | 18 | `review/eval/eval.test.sh` | 25 |
 | `review/codex-ro.test.sh` | 16 | `scripts/deps-check.test.sh` | 41 |
 

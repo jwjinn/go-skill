@@ -81,6 +81,26 @@ if [ -n "$mt" ]; then
   fi
 fi
 
+# ── ⭐⭐ 세션 스코프 (2026-09-16) — 남의 계획은 되읽지 않는다 ─────────────────────
+# 같은 워크트리의 다른 세션이 진행 중인 계획을 매 턴 37줄씩 되읽고 「별건이면 말해라」로 끝내면,
+# 별건을 하는 세션은 매 턴 그 문장에 답하게 된다(2026-09-16 실측). 무장 조건은 완주 게이트와
+# **같아야** 한다(같은 사실을 두 훅이 다르게 알면 안 된다) — 그래서 같은 공용 함수를 쓴다.
+# ⚠ 지금 프롬프트가 곧 go 호출이면 transcript 에 아직 없어도 채택이다(그 턴부터 되읽어야 한다).
+# ⚠ 판별 불가(2)는 종전대로 되읽는다.
+transcript=$(printf '%s' "$input" | jq -r '.transcript_path // ""' 2>/dev/null)
+prompt=$(printf '%s' "$input" | jq -r '.prompt // ""' 2>/dev/null)
+claim_rc=0
+if command -v plan_session_claims >/dev/null 2>&1; then
+  plan_session_claims "$transcript" "$(basename "$plan")"; claim_rc=$?
+fi
+if [ "$claim_rc" -eq 1 ]; then
+  case "$prompt" in
+    *"<command-name>/go</command-name>"*|*"<command-name>/go-review:go</command-name>"*) ;;
+    /go|/go\ *|"/go"$'\n'*|/go-review:go|/go-review:go\ *|"/go-review:go"$'\n'*) ;;
+    *) exit 0 ;;
+  esac
+fi
+
 # ── 목표 계약 추출 ───────────────────────────────────────────────────────────
 # 「## 목표 계약」 다음부터 다음 「## 」 전까지. 없으면 그 사실 자체를 말한다
 # (계약 없는 계획은 드리프트를 판정할 근거가 없다는 뜻이므로 조용히 넘기지 않는다).

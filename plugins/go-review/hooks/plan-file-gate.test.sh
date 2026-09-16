@@ -46,7 +46,13 @@ touch_at() { # $1=file $2=epoch  — BSD·GNU 양쪽
   touch -d "@$2" "$1" 2>/dev/null
 }
 
-tr_with_user() { # $1=file $2=epoch — 사람 프롬프트 1건이 든 transcript
+tr_with_user() { # $1=file $2=epoch — 사람 프롬프트 1건이 든 transcript(⭐ 계획을 **채택한** 세션의 모양)
+  # ⚠ 2026-09-16 부터 게이트는 「이 세션이 계획을 채택했나」를 본다. 기본 픽스처는 채택한 세션이어야
+  #   아래 BLOCK 기대들이 성립한다. 채택 흔적이 없는 모양은 tr_plain 이다(세션 스코프 절이 쓴다).
+  ts=$(date -j -u -f %s "$2" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$2" +%Y-%m-%dT%H:%M:%S)
+  printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts}.000Z\",\"message\":{\"content\":\"<command-name>/go-review:go</command-name> P0~P4\"}}" > "$1"
+}
+tr_plain() { # $1=file $2=epoch — 사람 프롬프트 1건, 그런데 go 호출도 계획 파일 쓰기도 없다(남의 계획을 보는 세션)
   ts=$(date -j -u -f %s "$2" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$2" +%Y-%m-%dT%H:%M:%S)
   printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts}.000Z\",\"message\":{\"content\":\"해줘\"}}" > "$1"
 }
@@ -101,7 +107,7 @@ tr_multi_user() { # $1=file $2=첫 발화 epoch $3=마지막 발화 epoch
   f1=$(date -j -u -f %s "$2" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$2" +%Y-%m-%dT%H:%M:%S)
   f2=$(date -j -u -f %s "$3" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$3" +%Y-%m-%dT%H:%M:%S)
   {
-    printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${f1}.000Z\",\"message\":{\"content\":\"P0~P4 해줘\"}}"
+    printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${f1}.000Z\",\"message\":{\"content\":\"/go P0~P4\"}}"
     printf '%s\n' '{"type":"assistant","message":{"content":[]}}'
     printf '%s\n' "{\"type\":\"user\",\"toolUseResult\":{},\"timestamp\":\"${f2}.000Z\"}"
     printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${f2}.000Z\",\"message\":{\"content\":\"계속해줘\"}}"
@@ -138,7 +144,7 @@ echo "=== ⭐ 도구 결과는 「사용자 메시지」가 아니다(todo 축�
 # 도구결과가 계획보다 **뒤** 시각인데도 그것으로 낡음 판정하면 게이트가 죽는다.
 ts_new=$(date -j -u -f %s "$((T_NEW + 3600))" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$((T_NEW + 3600))" +%Y-%m-%dT%H:%M:%S)
 ts_old=$(date -j -u -f %s "$T_OLD" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$T_OLD" +%Y-%m-%dT%H:%M:%S)
-{ printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_old}.000Z\",\"message\":{\"content\":\"해줘\"}}"
+{ printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_old}.000Z\",\"message\":{\"content\":\"/go 해줘\"}}"
   printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_new}.000Z\",\"toolUseResult\":{\"stdout\":\"a\"},\"message\":{\"content\":[{\"type\":\"tool_result\"}]}}"
   printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_new}.000Z\",\"isMeta\":true,\"message\":{\"content\":\"skill 주입\"}}"
 } > "$D/tr-tool.jsonl"
@@ -157,7 +163,7 @@ run "⭐ 도구결과 뒤 사람 발화 → **차단**(첫 발화가 기준이�
 
 # 첫 행이 도구 결과여도 그것을 「첫 사람 발화」로 세면 안 된다 → 계획이 그보다 앞이면 통과
 { printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_old}.000Z\",\"toolUseResult\":{},\"message\":{\"content\":[]}}"
-  printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_new}.000Z\",\"message\":{\"content\":\"해줘\"}}"
+  printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts_new}.000Z\",\"message\":{\"content\":\"/go 해줘\"}}"
 } > "$D/tr-tool3.jsonl"
 printf -- '- [ ] 남은 일\n' > "$D/p9b.md"; touch_at "$D/p9b.md" "$T_OLD"
 run "첫 행이 도구결과 → 그것은 첫 발화가 아니다(계획이 앞 → 통과)" "$D/p9b.md" "$D/tr-tool3.jsonl" s-t3 PASS
@@ -292,6 +298,66 @@ touch_at "$D/pgrow.md" "$T_NEW"
 raw "$D/pgrow.md" s-gr >/dev/null; raw "$D/pgrow.md" s-gr >/dev/null
 o=$(raw "$D/pgrow.md" s-gr)
 chk "⭐ 미완료가 늘어난 뒤에는 카운터가 리셋돼 계속 차단한다" "$o" '"block"' yes
+
+echo
+echo "=== ⭐⭐ 세션 스코프 — 이 세션이 **채택한** 계획만 막는다 (2026-09-16)"
+# 같은 워크트리에서 세션 A 가 계획을 진행하는 동안 세션 B 가 별건을 하면, B 는 계획 파일을
+# 쓰지도 go-review:go 를 부르지도 않았다. 그 B 를 A 의 미완료로 막는 것이 이 절이 잡는 오탐이다.
+# ⚠ 「채택」의 근거는 transcript 의 행위 흔적이다 — 사람 프롬프트의 go 호출 · Skill 도구 ·
+#   계획 파일을 **쓴** 도구(Write/Edit · Bash 재지향). 읽기는 채택이 아니다.
+rm -f "${TMPDIR:-/tmp}"/claude-plan-foreign-s-sc* 2>/dev/null
+TRP="$D/tr-plain.jsonl"; tr_plain "$TRP" "$T_OLD"
+# ⚠ 채택 흔적 ③(파일 쓰기)은 **파일 이름**으로 맞춘다 — 그래서 이 절의 계획은 실제 이름 plan-active.md 여야 한다.
+mkdir -p "$D/sc"; PSC="$D/sc/plan-active.md"
+printf -- '- [ ] 남의 일\n- [ ] 남의 일 2\n' > "$PSC"; touch_at "$PSC" "$T_NEW"
+run "채택 흔적 없음(사람 발화만) → 차단하지 않고 알린다" "$PSC" "$TRP" s-sc1 WARN
+run "같은 세션 2회차 → 조용(알림은 세션당 한 번)"          "$PSC" "$TRP" s-sc1 PASS
+o=$(CLAUDE_PLAN_FILE="$PSC" printf '{"session_id":"s-sc1b","transcript_path":"%s","stop_hook_active":false}' "$TRP" \
+    | CLAUDE_PLAN_FILE="$PSC" bash "$H")
+chk "알림이 「이 세션의 것이 아니다」를 말한다"      "$o" '이 세션의 것이 아니다' yes
+chk "알림이 채택 경로(go-review:go)를 안내한다"      "$o" 'go-review:go' yes
+chk "알림은 차단이 아니다"                           "$o" '"block"' no
+
+# 채택 흔적 다섯 — 어느 하나면 막는다
+mk_tr() { # $1=file $2=사람 프롬프트 내용 $3=(선택) assistant tool_use JSON 한 줄
+  ts=$(date -j -u -f %s "$T_OLD" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$T_OLD" +%Y-%m-%dT%H:%M:%S)
+  { printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${ts}.000Z\",\"message\":{\"content\":\"$2\"}}"
+    [ -n "${3:-}" ] && printf '%s\n' "$3"
+  } > "$1"
+}
+mk_tr "$D/tr-c1.jsonl" "<command-name>/go-review:go</command-name>"
+run "① 사람 프롬프트의 /go-review:go(래핑) → 차단" "$PSC" "$D/tr-c1.jsonl" s-sc2 BLOCK
+mk_tr "$D/tr-c2.jsonl" "/go 전부"
+run "① 원문 /go → 차단" "$PSC" "$D/tr-c2.jsonl" s-sc3 BLOCK
+mk_tr "$D/tr-c3.jsonl" "해줘" '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"go-review:go","args":"전부"}}]}}'
+run "② Skill 도구로 go-review:go → 차단" "$PSC" "$D/tr-c3.jsonl" s-sc4 BLOCK
+mk_tr "$D/tr-c4.jsonl" "해줘" '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/w/.claude/plan-active.md","old_string":"[ ]","new_string":"[x]"}}]}}'
+run "③ 계획 파일을 Edit → 차단" "$PSC" "$D/tr-c4.jsonl" s-sc5 BLOCK
+mk_tr "$D/tr-c5.jsonl" "해줘" '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cat > .claude/plan-active.md <<EOF\n- [ ] a\nEOF"}}]}}'
+run "③ Bash 재지향으로 계획 파일을 씀 → 차단" "$PSC" "$D/tr-c5.jsonl" s-sc6 BLOCK
+
+# 채택이 **아닌** 것 — 이것이 없으면 위 다섯은 「아무 도구 호출이나 있으면 막는다」와 구분되지 않는다
+rm -f "${TMPDIR:-/tmp}"/claude-plan-foreign-s-sn* 2>/dev/null
+mk_tr "$D/tr-n1.jsonl" "해줘" '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"head -20 .claude/plan-active.md; grep -c x .claude/plan-active.md 2>/dev/null"}}]}}'
+run "대조군: 계획 파일을 **읽기만** → 채택 아님(알림)" "$PSC" "$D/tr-n1.jsonl" s-sn1 WARN
+mk_tr "$D/tr-n2.jsonl" "해줘" '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/w/docs/other.md","content":"x"}}]}}'
+run "대조군: 다른 파일을 씀 → 채택 아님(알림)" "$PSC" "$D/tr-n2.jsonl" s-sn2 WARN
+mk_tr "$D/tr-n3.jsonl" "<command-name>/go-review:plan</command-name>"
+run "대조군: /go-review:plan 은 채택이 아니다(초안 단계)" "$PSC" "$D/tr-n3.jsonl" s-sn3 WARN
+mk_tr "$D/tr-n4.jsonl" "/goal 뭐지"
+run "대조군: /goal 은 /go 가 아니다" "$PSC" "$D/tr-n4.jsonl" s-sn4 WARN
+
+# 판별 불가는 차단 유지 — 위 「사람 프롬프트 없음」「transcript 부재」 두 케이스가 이미 잠근다.
+# 채택한 세션의 나머지 동작(상한·진전 없음·남의 계획 진단)은 위 절들이 tr_with_user 로 그대로 잠근다.
+
+# ⭐ 사보타주 — 채택 판별을 빼면(항상 채택으로 보면) 남의 계획도 막는다. 그것이 종전 결함이다.
+SAB2="$D/gate-sab2.sh"
+sed -e 's/\[ "\$claim_rc" -eq 1 \]/false/' "$H" > "$SAB2"
+o=$(CLAUDE_PLAN_FILE="$PSC" printf '{"session_id":"s-sab2","transcript_path":"%s","stop_hook_active":false}' "$TRP" \
+    | CLAUDE_PLAN_FILE="$PSC" bash "$SAB2")
+chk "⭐ 사보타주(채택 판별 제거)하면 남의 계획을 막는다 — 이 절이 그것을 지킨다" "$o" '"block"' yes
+rm -f "$SAB2" "${TMPDIR:-/tmp}"/claude-plan-gate-s-sab2 "${TMPDIR:-/tmp}"/claude-plan-progress-s-sab2
+rm -f "${TMPDIR:-/tmp}"/claude-plan-foreign-s-s* "${TMPDIR:-/tmp}"/claude-plan-gate-s-sc* "${TMPDIR:-/tmp}"/claude-plan-progress-s-sc* 2>/dev/null
 
 echo "pass=$pass fail=$fail"
 rm -rf "$D"

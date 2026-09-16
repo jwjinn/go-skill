@@ -32,7 +32,11 @@ esac
 EOF
   chmod +x "$SB/bin/orca"
 }
-run(){ rm -f "$SB/wave-close-gate.$(id -u).count"; PATH="$SB/bin:$PATH" bash "$GATE" >"$SB/out" 2>"$SB/err"; echo $?; }
+# ⚠ stdin 을 비운다 — 훅은 stdin 의 JSON(transcript_path)으로 세션 스코프를 판별하고, 없으면 종전대로 전부 본다.
+run(){ rm -f "$SB/wave-close-gate.$(id -u).count"; PATH="$SB/bin:$PATH" bash "$GATE" </dev/null >"$SB/out" 2>"$SB/err"; echo $?; }
+runtr(){ # runtr <transcript 경로> — Stop 훅 stdin 모양으로 transcript_path 를 준다
+  rm -f "$SB/wave-close-gate.$(id -u).count"
+  printf '{"session_id":"s","transcript_path":"%s"}' "$1" | PATH="$SB/bin:$PATH" bash "$GATE" >"$SB/out" 2>"$SB/err"; echo $?; }
 
 w() { # w <state> <dispatchStatus> <releaseCompletedAt|null> <id> <handle>
   printf '{"dispatchId":"%s","runId":"run_x","workerState":"%s","dispatchStatus":"%s","agentTerminalHandle":"%s","resource":{"releaseCompletedAt":%s}}' \
@@ -66,14 +70,14 @@ echo "== t4. ⛔⛔ 워커 세션에서는 아예 돌지 않는다 =="
 # 같은 부류의 훅이 워커의 턴을 막았고 워커는 그것을 풀 수단이 없었다(2026-09-15).
 mk_orca "$SB/held.json"
 rm -f "$SB/wave-close-gate.$(id -u).count"
-PATH="$SB/bin:$PATH" ORCA_TERMINAL_HANDLE=term_a bash "$GATE" >/dev/null 2>&1; rc=$?
+PATH="$SB/bin:$PATH" ORCA_TERMINAL_HANDLE=term_a bash "$GATE" </dev/null >/dev/null 2>&1; rc=$?
 eq "내 핸들이 워커 목록에 있으면 통과" "$rc" "0"
 
 echo "== t5. ⭐ 대조군 — 코디네이터 핸들은 그대로 막힌다 =="
 # 이것이 없으면 t4 의 판별이 「게이트를 통째로 끈 것」과 구분되지 않는다.
 mk_orca "$SB/held.json"
 rm -f "$SB/wave-close-gate.$(id -u).count"
-PATH="$SB/bin:$PATH" ORCA_TERMINAL_HANDLE=term_coordinator bash "$GATE" >/dev/null 2>&1; rc=$?
+PATH="$SB/bin:$PATH" ORCA_TERMINAL_HANDLE=term_coordinator bash "$GATE" </dev/null >/dev/null 2>&1; rc=$?
 eq "차단" "$rc" "2"
 
 echo "== t6. ⭐ 판정 불가는 통과한다 =="
@@ -81,7 +85,7 @@ mk_orca BROKEN;        eq "JSON 이 깨져도 통과" "$(run)" "0"
 # ⚠ PATH 에서 지우는 것만으로는 「없다」가 안 된다 — 시스템 orca 가 뒤에 남아 **진짜
 #   worker-list 를 읽는다**. 같은 부류를 질문 게이트에서도 밟았다.
 rm -f "$SB/bin/orca"
-rc=$(rm -f "$SB/wave-close-gate.$(id -u).count"; PATH="$SB/bin:$PATH" ORCA_BIN=/nonexistent/orca bash "$GATE" >/dev/null 2>&1; echo $?)
+rc=$(rm -f "$SB/wave-close-gate.$(id -u).count"; PATH="$SB/bin:$PATH" ORCA_BIN=/nonexistent/orca bash "$GATE" </dev/null >/dev/null 2>&1; echo $?)
 eq "orca 가 없으면 통과" "$rc" "0"
 
 echo "== t7. 실패로 끝난 워커도 「끝난 것」으로 센다 =="
@@ -94,7 +98,7 @@ echo "== t8. ⭐ 세션당 상한을 넘으면 통과한다(무한 차단 금지
 mk_orca "$SB/held.json"
 rm -f "$SB/wave-close-gate.$(id -u).count"
 LAST=9
-for i in 1 2 3; do PATH="$SB/bin:$PATH" CLAUDE_WAVE_CLOSE_GATE_MAX=2 bash "$GATE" >/dev/null 2>&1; LAST=$?; done
+for i in 1 2 3; do PATH="$SB/bin:$PATH" CLAUDE_WAVE_CLOSE_GATE_MAX=2 bash "$GATE" </dev/null >/dev/null 2>&1; LAST=$?; done
 eq "3회째는 통과" "$LAST" "0"
 
 echo "== t9. ⭐ 대조군의 대조군 — 회수 판정을 사보타주하면 t3 이 붉어진다 =="
@@ -102,7 +106,7 @@ SAB="$SB/gate-sab.sh"
 sed 's/not res.get("releaseCompletedAt")/True/' "$GATE" > "$SAB"
 mk_orca "$SB/done.json"
 rm -f "$SB/wave-close-gate.$(id -u).count"
-PATH="$SB/bin:$PATH" bash "$SAB" >/dev/null 2>&1; rc=$?
+PATH="$SB/bin:$PATH" bash "$SAB" </dev/null >/dev/null 2>&1; rc=$?
 eq "회수 여부를 안 보면 다 치운 파도도 막힌다" "$rc" "2"
 
 echo "== t10. ⭐⭐ 보류 표식이 있으면 조용히 통과한다 =="
@@ -142,6 +146,17 @@ printf '{"result":{"workers":[%s,%s]}}' \
   "$(wr succeeded completed null ctx_tk2 term_tk2 user_takeover)" > "$SB/takeover.json"
 mk_orca "$SB/takeover.json"; eq "user_takeover 만 남았으면 통과" "$(run)" "0"
 
+echo "== t14-b. ⭐ 닫을 수 없는 사유는 **셋**이다 (2026-09-16) =="
+# `worker-release --help` Notes: "Never closes setup terminals, configured tabs, reused or
+# pre-existing terminals, user-taken-over terminals, or unproven identities."
+# 하나만 면제했더니 나머지 둘로 run 둘이 계속 막혔다(실측).
+for r in external_terminal identity_unproven; do
+  printf '{"result":{"workers":[%s,%s]}}' \
+    "$(wr succeeded completed null ctx_x1 term_x1 "$r")" \
+    "$(wr succeeded completed null ctx_x2 term_x2 "$r")" > "$SB/reason.json"
+  mk_orca "$SB/reason.json"; eq "$r 만 남았으면 통과" "$(run)" "0"
+done
+
 echo "== t15. ⭐ 대조군 — **다른 사유**의 보류는 그대로 막는다 =="
 # 이것이 없으면 위 완화가 「사유를 안 보고 전부 통과」로 흘러가도 아무도 모른다.
 printf '{"result":{"workers":[%s,%s]}}' \
@@ -157,6 +172,49 @@ printf '{"result":{"workers":[%s,%s]}}' \
 mk_orca "$SB/mixed.json"; eq "섞이면 나머지로 차단" "$(run)" "2"
 grep -q 'ctx_m2' "$SB/err" && ok "막는 자원만 나열한다" || bad "목록이 없다" "$(cat "$SB/err")"
 grep -q 'ctx_m1' "$SB/err" && bad "닫을 수 없는 자원까지 나열한다" "$(cat "$SB/err")" || ok "user_takeover 는 목록에서 뺀다"
+
+echo "== t16-b. ⛔ stdin 이 **열린 채**로 넘어와도 멈추지 않는다 (2026-09-16) =="
+# 종전 판은 `cat` 으로 받아서 그런 호출에 영영 멈췄다. 게이트가 아니라 턴이 서는 부류다.
+mk_orca "$SB/held.json"
+rm -f "$SB/wave-close-gate.$(id -u).count"
+( sleep 30 ) | { PATH="$SB/bin:$PATH" CLAUDE_WAVE_STDIN_TIMEOUT=1 bash "$GATE" >/dev/null 2>&1; echo $? > "$SB/rc-open"; } &
+BGPID=$!
+WAITED=0
+while kill -0 "$BGPID" 2>/dev/null && [ "$WAITED" -lt 10 ]; do sleep 1; WAITED=$((WAITED+1)); done
+if kill -0 "$BGPID" 2>/dev/null; then
+  kill "$BGPID" 2>/dev/null; bad "stdin 이 열린 채면 멈춘다 — 10초 안에 끝나지 않았다"
+else
+  ok "열린 stdin 에서도 $WAITED 초 안에 끝난다 (rc $(cat "$SB/rc-open" 2>/dev/null))"
+fi
+pkill -f 'sleep 30' 2>/dev/null || true
+
+echo "== t17. ⭐⭐ 세션 스코프 — 이 세션이 관여한 run 만 막는다 (2026-09-16) =="
+# 훅을 점검하던 세션이 남의 fan-out 세 차수로 매 턴 막혔다. 판별은 transcript 의 도구 호출·결과다.
+mk_orca "$SB/held.json"
+printf '%s\n' '{"type":"user","message":{"content":"훅 점검해줘"}}' \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}' > "$SB/tr-other.jsonl"
+eq "run_x 를 본 적 없는 세션 → 통과" "$(runtr "$SB/tr-other.jsonl")" "0"
+printf '%s\n' '{"type":"user","message":{"content":"파도 닫아"}}' \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"orca orchestration worker-list --run run_x --json"}}]}}' > "$SB/tr-mine.jsonl"
+eq "run_x 를 도구로 다룬 세션 → 차단" "$(runtr "$SB/tr-mine.jsonl")" "2"
+printf '%s\n' '{"type":"user","message":{"content":"x"}}' \
+  '{"type":"user","toolUseResult":{"stdout":"runId run_x dispatched"},"message":{"content":[{"type":"tool_result","content":"run_x"}]}}' > "$SB/tr-res.jsonl"
+eq "run_x 가 도구 **결과**에만 있어도 관여다 → 차단" "$(runtr "$SB/tr-res.jsonl")" "2"
+
+echo "== t18. ⭐ 대조군 — 게이트 자신의 차단 문구(사람 발화 행)는 관여의 근거가 아니다 =="
+# 이것이 없으면 한 번 막힌 세션은 그 문구가 transcript 에 남아 영원히 「관여한 세션」이 된다.
+printf '%s\n' '{"type":"user","message":{"content":"Stop hook feedback: run run_x — 워커 2 명 전원 종료, 그런데 2 개가 살아 있다"}}' > "$SB/tr-fb.jsonl"
+eq "차단 문구만 있는 세션 → 통과" "$(runtr "$SB/tr-fb.jsonl")" "0"
+
+echo "== t18-b. ⭐ 대조군 — 모델이 **산문에 인용한** run_id 는 관여가 아니다 =="
+# 이 게이트에 막힌 세션은 run_id 를 답변에 적게 된다. 그것을 세면 자기 출력이 자기 근거가 된다.
+printf '%s\n' '{"type":"user","message":{"content":"훅 점검"}}' \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"run_x 에 잔여 컨텍스트 2개가 있습니다."}]}}' > "$SB/tr-prose.jsonl"
+eq "산문 인용만 → 통과" "$(runtr "$SB/tr-prose.jsonl")" "0"
+
+echo "== t19. ⭐ 판별 불가는 종전대로 전부 본다 =="
+eq "transcript 경로가 없는 파일이면 → 차단(좁히지 않는다)" "$(runtr "$SB/없는것.jsonl")" "2"
+eq "stdin 이 비어 있으면 → 차단(종전 동작)" "$(run)" "2"
 
 echo
 echo "검사 $((PASS+FAIL))개 · 통과 $PASS · 실패 $FAIL"

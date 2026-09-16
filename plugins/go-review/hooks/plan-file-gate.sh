@@ -148,6 +148,30 @@ if [ -n "$plan_at" ] && [ -n "$first_at" ] && [ "$plan_at" -lt "$first_at" ] 2>/
   exit 0   # 이 세션이 시작되기 전에 쓰인 파일이다 → 잔재로 본다
 fi
 
+# ── ⭐⭐ 세션 스코프 — 이 세션이 **채택한** 계획만 막는다 (2026-09-16) ──────────────
+#
+# 계획 파일은 워크트리에 하나다. 같은 워크트리에서 세션 A 가 계획을 진행하는 동안 세션 B 가
+# 별건을 하면, 위 낡음 판별은 B 를 걸러 주지 못한다(계획이 B 의 시작 뒤에도 갱신되므로).
+# 실측(2026-09-16): 훅을 점검하던 세션이 남의 계획 14개로 매 턴 막혔다 — 그 세션은 계획 파일을
+# 쓰지도, go-review:go 를 부르지도 않았다. 게이트가 재려던 것은 「승인받은 계획을 완주했나」이고
+# 승인은 세션의 행위이므로, 그 행위의 흔적(`plan_session_claims` · _planpath.sh)을 본다.
+# ⚠ 판별 불가(rc 2)는 **차단 유지**다 — 모르는 것을 근거로 게이트를 열지 않는다.
+# ⚠ 남의 것이면 차단하지 않되 **침묵하지도 않는다** — 세션당 한 번 알린다(조용한 통과와
+#   검사한 통과를 같은 것으로 읽지 않게).
+claim_rc=0
+if command -v plan_session_claims >/dev/null 2>&1; then
+  plan_session_claims "$transcript" "$(basename "$plan")"; claim_rc=$?
+fi
+if [ "$claim_rc" -eq 1 ]; then
+  once="${TMPDIR:-/tmp}/claude-plan-foreign-${session}"
+  if [ ! -f "$once" ]; then
+    : > "$once" 2>/dev/null
+    jq -n --arg p "$plan" --arg n "$left" \
+      '{systemMessage: ("ℹ 이 워크트리에 미완료 " + $n + "개짜리 계획이 있지만 **이 세션의 것이 아니다**(" + $p + "). 이 세션은 go-review:go 를 부르지도 그 파일을 쓰지도 않았으므로 완주 게이트가 막지 않는다 — 그 계획을 이어가려면 `go-review:go` 로 채택해라(§0-b 경로 ①). 이 알림은 세션당 한 번이다.")}' 2>/dev/null
+  fi
+  exit 0
+fi
+
 # ── 무한루프 방지 ①: 세션당 차단 횟수 상한 ──────────────────────────────────
 max=${CLAUDE_PLAN_GATE_MAX:-8}
 cnt_file="${TMPDIR:-/tmp}/claude-plan-gate-${session}"

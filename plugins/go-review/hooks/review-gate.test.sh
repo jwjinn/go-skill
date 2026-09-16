@@ -45,7 +45,18 @@ import sys, json, datetime
 path, ts = sys.argv[1], int(sys.argv[2])
 iso = datetime.datetime.utcfromtimestamp(ts).strftime('%Y-%m-%dT%H:%M:%SZ')
 with open(path, 'w') as f:
-    f.write(json.dumps({"type": "user", "timestamp": iso}) + "\n")
+    # ⭐ 기본 픽스처는 리뷰를 **채택한** 세션이다(go 호출이 있다 · 2026-09-16 세션 스코프).
+    f.write(json.dumps({"type": "user", "timestamp": iso,
+                        "message": {"content": "<command-name>/go-review:go</command-name>"}}) + "\n")
+EOF
+}
+pyplain(){ # $1=transcript 경로 $2=epoch — 사람 발화는 있는데 go 호출도 파일 쓰기도 없다(남의 리뷰를 보는 세션)
+  python3 - "$1" "$2" <<'EOF'
+import sys, json, datetime
+path, ts = sys.argv[1], int(sys.argv[2])
+iso = datetime.datetime.utcfromtimestamp(ts).strftime('%Y-%m-%dT%H:%M:%SZ')
+with open(path, 'w') as f:
+    f.write(json.dumps({"type": "user", "timestamp": iso, "message": {"content": "해줘"}}) + "\n")
 EOF
 }
 setmtime(){ python3 -c "import os,sys; os.utime(sys.argv[1],(int(sys.argv[2]),int(sys.argv[2])))" "$1" "$2"; }
@@ -152,6 +163,32 @@ out=$(printf '' | bash "$HOOK" 2>/dev/null); rc=$?
 [ "$rc" -eq 0 ] && [ -z "$out" ] && ok "빈 stdin → exit 0·무출력" "PASS" || ng "빈 stdin" "PASS" "rc=$rc"
 out=$(printf 'not json' | bash "$HOOK" 2>/dev/null); rc=$?
 [ "$rc" -eq 0 ] && ok "깨진 stdin → exit 0" "PASS" || ng "깨진 stdin" "exit 0" "rc=$rc"
+
+echo "=== ⑧ ⭐⭐ 세션 스코프 — 이 세션이 채택한 리뷰·계획만 본다 (2026-09-16)"
+setup s20; printf '# r\n- [ ] 남의 미해결\n' > "$T/.claude/review-active.md"; setmtime "$T/.claude/review-active.md" "$NOW"
+pyplain "$T/tr.jsonl" "$((NOW - 3600))"
+expect "채택 흔적 없음 → 남의 리뷰는 막지 않는다" PASS "$(run)"; cleanup
+
+setup s21; printf '# r\n- [ ] 미해결\n' > "$T/.claude/review-active.md"; setmtime "$T/.claude/review-active.md" "$NOW"
+python3 -c 'import json,sys;print(json.dumps({"type":"user","timestamp":"2000-01-01T00:00:00Z","message":{"content":"<command-name>/go-review:review-loop</command-name>"}}))' > "$T/tr.jsonl"
+expect "/go-review:review-loop 을 부른 세션 → 차단" BLOCK "$(run)"; cleanup
+
+setup s22; printf '# r\n- [ ] 미해결\n' > "$T/.claude/review-active.md"; setmtime "$T/.claude/review-active.md" "$NOW"
+{ python3 -c 'import json;print(json.dumps({"type":"user","timestamp":"2000-01-01T00:00:00Z","message":{"content":"해줘"}}))'
+  python3 -c 'import json;print(json.dumps({"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/w/.claude/review-active.md","content":"- [ ] x"}}]}}))'
+} > "$T/tr.jsonl"
+expect "리뷰 파일을 쓴 세션 → 차단" BLOCK "$(run)"; cleanup
+
+setup s23; printf '# p\n- [ ] 남의 할일\n' > "$T/.claude/plan-active.md"; printf 'x\n' > "$T/a.go"
+pyplain "$T/tr.jsonl" "$((NOW - 3600))"
+expect "경고 축도 스코프다 — 남의 계획 + 내 코드 변경 → 조용" PASS "$(run)"; cleanup
+
+# ⭐ 사보타주 — 채택 판별을 빼면 s20 이 막힌다(= 종전 결함). 이것이 없으면 위 PASS 가 「게이트를 통째로 뺀 것」과 구분되지 않는다.
+SAB="$(mktemp)"; sed -e 's/\[ "\$r_claim" -ne 1 \]/true/' "$HOOK" > "$SAB"
+setup s24; printf '# r\n- [ ] 남의 미해결\n' > "$T/.claude/review-active.md"; setmtime "$T/.claude/review-active.md" "$NOW"
+pyplain "$T/tr.jsonl" "$((NOW - 3600))"
+o=$(printf '{"session_id":"%s","transcript_path":"%s/tr.jsonl"}' "$SESS" "$T" | CLAUDE_PROJECT_DIR="$T" bash "$SAB" 2>/dev/null)
+expect "⭐ 사보타주(채택 판별 제거) → 남의 리뷰를 막는다" BLOCK "$o"; cleanup; rm -f "$SAB"
 
 echo "=== ⑦ 사보타주 — 탐지기가 정말 그 조건을 보는가"
 # 미해결 줄을 [x] 로 바꾸면 통과해야 한다. 안 그러면 이 테스트는 다른 이유로 BLOCK 을 보고 있다.

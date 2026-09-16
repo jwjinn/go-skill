@@ -34,9 +34,14 @@ print(d.get("prompt") or d.get("user_prompt") or "")
 
 # `/go` 호출인가 — 원문(`/go …`)과 래핑(`<command-name>/go</command-name>`) 둘 다 본다.
 # ⚠ `/goal` 같은 다른 명령에 걸리지 않게 경계를 명시한다.
+# ⚠⚠ 플러그인으로 로드되면 이름이 `/go-review:go` 다(래핑은 `<command-name>/go-review:go</command-name>`).
+#   2026-09-16 실측: 그 표기를 안 봐서 이 훅이 실사용에서 **한 번도 발화하지 않았다** —
+#   결정 선행(G9)·병렬 배치·Q-T 안내가 전부 조용히 빠졌다(대조군은 옛 표기 `/go` 만 잠갔다).
 case "$prompt" in
   /go|/go\ *|"/go"$'\n'*) ;;
+  /go-review:go|/go-review:go\ *|"/go-review:go"$'\n'*) ;;
   *"<command-name>/go</command-name>"*) ;;
+  *"<command-name>/go-review:go</command-name>"*) ;;
   *) exit 0 ;;
 esac
 
