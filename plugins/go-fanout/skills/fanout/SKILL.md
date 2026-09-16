@@ -1,5 +1,5 @@
 ---
-name: go-fanout
+name: fanout
 description: |
   go-review 체인(계획 승인 → 구현 → 교차 리뷰 → 반영)을 Orca 오케스트레이션으로 **여러 워커에
   fan-out** 한다. 파일 집합이 겹치지 않는 작업 N개를 각자의 워크트리에 띄우고, 각 워커가 자기
@@ -7,7 +7,7 @@ description: |
   뒤, 코디네이터가 결과를 거두어 합본 리뷰 1회를 돌리고 통합한다.
   사람은 앞(협의문)과 뒤(최종 보고)에만 있다.
   "병렬로 개발하고 각 에이전트가 리뷰를 받게 해줘", "워커마다 go-review 를 돌려줘",
-  "fan out", "/go-fanout" 같은 요청에 사용한다.
+  "fan out", "/go-fanout:fanout" 같은 요청에 사용한다.
   ⚠ 단일 작업이면 이 스킬을 쓰지 마라 — `go-review:go` 하나면 된다.
 ---
 
@@ -60,10 +60,23 @@ Orca 명령의 정본은 항상 `orca skills get orchestration` 이고, 이 파�
 ## 0. 선행 확인 (코디네이터 · 착수 전)
 
 ```bash
-orca status --json                       # 런타임 ready 인가
+orca status --json                       # 런타임 ready 인가 (⛔ 없으면 이 스킬은 아무것도 못 한다)
 orca skills get orchestration            # ⭐ 명령 문법의 정본을 먼저 읽어라
-bash ~/.claude/skills/go-review/hooks/doctor.sh   # go-review 체인이 살아 있나
+
+# 이 플러그인과 형제 플러그인의 설치 위치 — **이 문서에서 한 번만 구하고 이후 이 변수를 쓴다**
+GF="${CLAUDE_PLUGIN_ROOT}"
+for d in "$GF/../go-review" "$GF"/../../go-review/*/; do [ -d "$d" ] && { GR=$(cd "$d" && pwd); break; }; done
+sib() { bash "$GR/hooks/_plugins.sh" "$@"; }   # ⭐ 탐색의 정본은 go-review 안에 한 벌뿐이다
+GT=$(sib go-tester tester/_config.py)
+
+bash "$GR/hooks/doctor.sh"               # go-review 체인이 살아 있나
 ```
+
+⚠ **경로를 고정 문자열로 적지 마라.** 설치 방식에 따라 이 플러그인이 놓이는 자리가 다르다 —
+심링크(`~/.claude/skills/go-fanout`)와 마켓플레이스(`~/.claude/plugins/cache/<마켓>/go-fanout/<버전>`).
+2026-09-16 포장 전에는 `~/.claude/skills/...` 가 문서 전체에 박혀 있어서, 마켓플레이스로 받은
+사람은 **없는 경로를 치게** 돼 있었다. `sib` 는 두 모양을 다 찾는다(형제 플러그인은 같은 저장소·
+같은 마켓플레이스에서 나오므로 언제나 형제 자리에 있다).
 
 - `doctor.sh` 의 **「훅 등록 5/5」** 를 확인해라. 플러그인 `hooks.json` 경로로 등록돼 있으면
   전역이라 **새 워크트리의 워커 세션에도 자동 적용**된다. 프로젝트 `settings.json` 에만 있으면
@@ -276,7 +289,7 @@ PY
 잇지 못한다:
 
 > 테스트 위임이 켜져 있다. 계획에 `위임 가능 (full)` 또는 `일부 위임` 이라 적힌 항목에 닿으면
-> `~/.claude/skills/go-tester/tester/tester.sh` 를 부르고, 그 밖에는 네가 직접 써라.
+> `$GT/tester/tester.sh` 를 부르고(위 §0 의 `sib`), 그 밖에는 네가 직접 써라.
 > 「일부 위임」이면 **구현을 먼저 끝내고 테스트만** 넘겨라(자식은 소스를 고칠 수 없다).
 
 ### ⚠ 첫 파도는 **한 워커만** 켜라 — 긴 작업의 동시성은 미측정이다
@@ -459,24 +472,19 @@ orca orchestration inbox --json      # ⚠ `message-list` 라는 명령은 **없
 절차는 이미 있었고(위 대기 루프) 내가 안 따랐다. 그래서 **Stop 훅**으로 만들었다:
 `worker-question-gate.sh` — 답 없는 `question` 이 하나라도 있으면 **턴 종료를 거부**한다.
 
-**훅 본체는 이 스킬에 동봉돼 있다** — `~/.claude/skills/go-fanout/worker-question-gate.sh`
-(대조군 `worker-question-gate.test.sh` · **14검사**). 프로젝트로 복사해 설치한다:
+**훅 본체는 이 플러그인에 있고 설치가 곧 등록이다** — `hooks/worker-question-gate.sh`
+(대조군 `hooks/worker-question-gate.test.sh` · **20검사**). `hooks/hooks.json` 이 Stop 에
+붙이므로 프로젝트마다 손으로 넣을 것이 없다.
 
 ```bash
-cp ~/.claude/skills/go-fanout/worker-question-gate*.sh "$CLAUDE_PROJECT_DIR/.claude/hooks/"
-chmod +x "$CLAUDE_PROJECT_DIR/.claude/hooks/worker-question-gate"*.sh
-bash "$CLAUDE_PROJECT_DIR/.claude/hooks/worker-question-gate.test.sh"   # 14검사 초록 확인
+bash "$GF/hooks/worker-question-gate.test.sh"   # 20검사 초록 확인
 ```
 
-⚠ **복사본이 정본을 앞서지 않게 하라.** 고칠 일이 생기면 **이 스킬의 것을 고치고** 다시
-복사해라. 프로젝트 쪽만 고치면 다음 레포가 낡은 것을 받는다(이 파이프라인이 잡으려는
-「정본이 둘」 그 자체다).
-
-설치 등록(프로젝트 `.claude/settings.json` 의 `Stop` 배열에 한 줄):
-```json
-{"type":"command","command":"bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/worker-question-gate.sh\"",
- "timeout":20,"statusMessage":"병렬 워커 미답변 질문 확인"}
-```
+⛔⛔ **프로젝트로 복사하지 마라.** 2026-09-16 포장 전에는 이 절이 「복사해 설치한다」였고,
+실제로 fabrix 의 `.claude/hooks/` 에 사본 둘이 생겨 정본이 갈릴 자리가 됐다. 사본은 워커
+워크트리로 그대로 퍼지고, 고칠 때 한쪽만 고치면 다음 레포가 낡은 것을 받는다 — 이 파이프라인이
+잡으려는 「정본이 둘」 그 자체다. 이미 복사본이 있으면 **지우고 등록 줄도 함께 빼라**(안 그러면
+같은 게이트가 두 번 돈다).
 
 판정: `type=question` 인 메시지 중, 같은 `thread_id` 를 가진 답변(`type=status` ·
 `to_handle` 이 `dispatch:`)이 없는 것.
@@ -580,7 +588,7 @@ orca orchestration worker-release --dispatch <dispatch_id> --json
 
    ```bash
    orca orchestration worker-release --dispatch <이 파도의 dispatch_id>   # 워커마다
-   bash ~/.claude/skills/go-fanout/cleanup.sh --run <run_id> --apply       # 머지된 것만 골라 회수·삭제
+   bash "$GF/scripts/cleanup.sh" --run <run_id> --apply       # 머지된 것만 골라 회수·삭제
    orca orchestration worker-list --run <run_id> | tail -1                 # 잔존을 센다
    ```
 
@@ -644,9 +652,9 @@ bash scripts/worker-report-check.sh --base <base ref> --marker <차수 날짜> <
 그래서 순서를 스크립트에 박았다. 재기만 하고, 되돌릴 수 없는 일은 `--apply` 를 줘야 한다.
 
 ```bash
-bash ~/.claude/skills/go-fanout/wave-close.sh --run <run_id> \
+bash "$GF/scripts/wave-close.sh" --run <run_id> \
      --base <base ref> --marker <차수 날짜>            # 재기만 한다(기본 dry-run)
-bash ~/.claude/skills/go-fanout/wave-close.sh --run <run_id> \
+bash "$GF/scripts/wave-close.sh" --run <run_id> \
      --base <base ref> --marker <차수 날짜> --apply    # 통과하면 cleanup.sh 로 넘긴다
 ```
 
@@ -677,7 +685,7 @@ bash ~/.claude/skills/go-fanout/wave-close.sh --run <run_id> \
 워커가 없고**, **회수되지 않은 자원이 있다**.
 
 ```bash
-bash ~/.claude/skills/go-fanout/wave-close-gate.test.sh   # 대조군 29검사
+bash "$GF/hooks/wave-close-gate.test.sh"   # 대조군 31검사
 ```
 
 ⭐⭐ **이 세션이 관여한 run 만 막는다**(2026-09-16). 훅을 점검하던 세션이 지난 사흘의 파도 세
@@ -693,9 +701,8 @@ transcript 의 **도구 호출 입력과 도구 결과**다 — 코디네이터�
 (`user_takeover`) · 증명되지 않은 신원(`identity_unproven`). 그 셋만 면제하고 **넓히지 않는다**:
 여기 없는 사유는 닫을 수 있다는 뜻이고, 모르는 사유를 면제하면 게이트가 조용히 꺼진다.
 
-⚠ 등록은 **스킬 경로를 그대로** 가리켜라(`bash "$HOME/.claude/skills/go-fanout/wave-close-gate.sh"`).
-레포에 사본을 두면 정본이 둘이 되고 **그 사본이 워커 워크트리로 퍼진다** — 2026-09-15 에
-그 경로로 워커가 남의 질문 때문에 멈췄다.
+⚠ 등록은 **플러그인이 알아서 한다**(`hooks/hooks.json`). 레포에 사본을 두면 정본이 둘이 되고
+**그 사본이 워커 워크트리로 퍼진다** — 2026-09-15 에 그 경로로 워커가 남의 질문 때문에 멈췄다.
 ⛔⛔ 그래서 이 훅도 **워커 세션에서는 아예 돌지 않는다**(터미널 핸들로 판별 · 대조군 t4·t5).
 
 ⇒ **회수 순서는 이렇다**(위 스크립트가 ①~⑤를 대신 재 준다):
@@ -730,8 +737,8 @@ fan-out 이 만든 워커 워크트리는 **머지가 끝나면 지운다.** 사
 `docs/리뷰-이력/워커-종료보고-<날짜>/` 로 먼저 옮겨 두는 편이** 보고를 쓸 때 편하다.
 
 ```bash
-bash ~/.claude/skills/go-fanout/cleanup.sh --run <run_id>           # 후보 표만(기본 dry-run)
-bash ~/.claude/skills/go-fanout/cleanup.sh --run <run_id> --apply   # 회수 → release → 삭제
+bash "$GF/scripts/cleanup.sh" --run <run_id>           # 후보 표만(기본 dry-run)
+bash "$GF/scripts/cleanup.sh" --run <run_id> --apply   # 회수 → release → 삭제
 ```
 
 ⭐ **「기억」은 새로 만들지 않았다.** `orca orchestration worker-list --run <id> --json` 이
@@ -766,7 +773,7 @@ bash ~/.claude/skills/go-fanout/cleanup.sh --run <run_id> --apply   # 회수 →
   코디네이터 소유가 아니라 「사람이 띄운 외부 터미널」로 등록돼 있다. 삭제와 무관하고, rm 이 되면 사이드바에서 같이 사라진다.
 - rm 이 실패하면 detach 만 남아 사이드바가 `Detached HEAD` 로 바뀐다 ⇒ 실패 경로에서 **브랜치를 다시 붙인다**.
 
-검증: `bash ~/.claude/skills/go-fanout/cleanup.test.sh` (27검사 · 대조군 4종 — 게이트를 풀면
+검증: `bash "$GF/scripts/cleanup.test.sh"` (27검사 · 대조군 4종 — 게이트를 풀면
 ready 로 바뀌는가 · 스텁 rm 이 미커밋을 정말 거부하는가 · detach 를 빼면 브랜치가 실제로 사라지는가 ·
 두 번째 apply 는 gone 인가). ⚠ 스텁은 실물의 근사다 — 실물에서 새 거부 사유가 나오면 **스텁에 먼저 넣어라.**
 ⚠ 첫 실측이 결함을 하나 잡았다 — `--porcelain` 이 완전 untracked 디렉토리를 `?? .claude/`
@@ -993,7 +1000,7 @@ Agent(subagent_type: "general-purpose", model: "opus", prompt: <감사 지시서
 
 ```bash
 # 교차 — 정규화·워크트리내 중복까지 처리한다(셸 uniq 로 세지 마라)
-python3 ~/.claude/skills/go-fanout/_crossing.py <base ref> <워크트리…>
+python3 "$GF/scripts/_crossing.py" <base ref> <워크트리…>
 ```
 
 ⭐ 교차가 **있다고 곧 충돌은 아니다.** 두 워커가 같은 파일의 **다른 영역**을 고쳤으면 git 이

@@ -27,6 +27,12 @@ set -uo pipefail
 
 MAX="${CLAUDE_WAVE_CLOSE_GATE_MAX:-8}"
 STAMP="${TMPDIR:-/tmp}/wave-close-gate.$(id -u).count"
+
+# ⭐ 이 플러그인의 루트 — 안내 문구가 **실제로 실행되는 경로**를 말해야 한다 (2026-09-16 포장).
+#   `CLAUDE_PLUGIN_ROOT` 는 훅으로 불릴 때 하네스가 준다. 직접 실행·테스트에서는 없으므로
+#   자기 위치에서 구한다(`hooks/` 의 부모). ⚠ 심링크 설치와 마켓플레이스 설치에서 경로가
+#   다르므로 **고정 문자열을 적지 마라** — 그러면 받는 쪽이 없는 경로를 친다.
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)}"
 ORCA_BIN="${ORCA_BIN:-orca}"
 
 # ⭐⭐ 세션 스코프 (2026-09-16) — **이 세션이 관여한 run** 만 막는다.
@@ -178,7 +184,7 @@ echo "$((N+1))" > "$STAMP" 2>/dev/null || true
   done
   echo
   echo "마감은 한 명령이다. **재고, 막히면 멈추고, 통과하면 회수한다**:"
-  echo "    bash ~/.claude/skills/go-fanout/wave-close.sh --run <run_id> \\"
+  echo "    bash $PLUGIN_ROOT/scripts/wave-close.sh --run <run_id> \\"
   echo "         --base <base ref> --marker <차수 날짜>"
   echo "  통과하면 --apply 를 붙여 실제로 회수한다."
   echo

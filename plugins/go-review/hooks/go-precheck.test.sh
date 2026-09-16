@@ -313,8 +313,12 @@ echo "=== ⭐⭐ 대조군 — go-tester 가 **없으면** 이 축이 통째로 
 setup
 printf -- '# 계획\n\n## 목표 계약\n원 요청: "x"\n\n## 결정 필요(승인 전)\n없음\n\n## 병렬 배치\n단독\n\n## P0\n- [ ] a\n- [ ] b\n' \
   > "$T/.claude/plan-draft.md"
+# ⚠ 격리가 **둘**이다. 훅은 go-tester 를 ①자기 플러그인 루트의 형제 ②HOME 아래 순으로
+#   찾으므로(_plugins.sh), HOME 만 비우면 실제 저장소의 go-tester 를 찾아 이 대조군이 깨진다.
+#   2026-09-16 에 실제로 깨졌고, 그 깨짐이 형제 탐색이 도는 증거였다.
 HOME_ORIG="$HOME"; export HOME="$T/emptyhome"; mkdir -p "$HOME/.claude/skills"
-out=$(run "/go")
+mkdir -p "$T/lonely-plugin/hooks"
+out=$(CLAUDE_PLUGIN_ROOT="$T/lonely-plugin" run "/go")
 export HOME="$HOME_ORIG"
 printf '%s' "$out" | grep -qE 'Q-T|테스트 에이전트' && ng "go-tester 없는데 말한다" "$out" || ok "설치 안 됐으면 조용하다"
 cleanup
@@ -330,6 +334,43 @@ out=$(run "/go")
 tester_unstub
 printf '%s' "$out" | grep -q '다른 계획' && ok "다른 계획의 옵트인을 지목한다" || ng "잔재 미지목" "$out"
 cleanup
+
+echo "=== ⭐⭐ 형제 플러그인 탐색 — 설치 모양 둘을 다 찾는다 (2026-09-16)"
+# 고정 문자열 `~/.claude/skills/go-tester` 는 심링크 설치에만 있다. 마켓플레이스로 받으면
+# `…/cache/<마켓>/go-tester/<버전>/` 이고, 그 경로를 못 찾으면 위임이 조용히 rc 70 으로 닫힌다.
+. "$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/_plugins.sh"
+SB=$(mktemp -d)
+
+# ① 심링크 모양 — 형제가 바로 옆에 있다
+mkdir -p "$SB/skills/go-review/hooks" "$SB/skills/go-tester/tester"
+: > "$SB/skills/go-tester/tester/_config.py"
+# ⚠ 반환값은 **정규화된 절대 경로**다(`…/go-review/../go-tester` 를 그대로 주면 안내 문구에
+#   그 모양이 실린다). 그래서 기대값도 정규화해서 비교한다.
+want=$(CDPATH='' cd -- "$SB/skills/go-tester" && pwd)
+got=$(CLAUDE_PLUGIN_ROOT="$SB/skills/go-review" sibling_plugin go-tester tester/_config.py)
+[ "$got" = "$want" ] && ok "① 심링크 모양에서 찾는다" || ng "심링크 모양" "$got"
+
+# ② 마켓플레이스 모양 — 형제가 한 단계 위에 있고 버전 디렉토리가 낀다
+mkdir -p "$SB/cache/mk/go-review/0.6.0/hooks" "$SB/cache/mk/go-tester/0.1.0/tester"
+: > "$SB/cache/mk/go-tester/0.1.0/tester/_config.py"
+got=$(CLAUDE_PLUGIN_ROOT="$SB/cache/mk/go-review/0.6.0" sibling_plugin go-tester tester/_config.py)
+case "$got" in *"/go-tester/0.1.0") ok "② 마켓플레이스 모양에서 찾는다" ;;
+               *) ng "마켓플레이스 모양" "$got" ;; esac
+
+# ③ ⭐ 대조군 — 이름만 맞고 **내용이 없으면** 채택하지 않는다
+mkdir -p "$SB/empty/go-review/hooks" "$SB/empty/go-tester"
+HOME_ORIG="$HOME"; export HOME="$SB/nohome"
+if CLAUDE_PLUGIN_ROOT="$SB/empty/go-review" sibling_plugin go-tester tester/_config.py >/dev/null; then
+  ng "빈 껍데기를 채택했다" "확인 파일이 없는데 찾았다고 말한다"
+else
+  ok "③ ⭐ 확인 파일이 없으면 못 찾은 것으로 본다(틀린 경로를 주지 않는다)"
+fi
+
+# ④ ⭐ 대조군 — 아무 데도 없으면 rc 1 이고 출력이 비어 있다
+got=$(CLAUDE_PLUGIN_ROOT="$SB/empty/go-review" sibling_plugin go-없는것 x/y 2>/dev/null); rc=$?
+[ "$rc" = 1 ] && [ -z "$got" ] && ok "④ 없으면 rc 1 · 빈 출력" || ng "부재 처리" "rc=$rc out=$got"
+export HOME="$HOME_ORIG"
+rm -rf "$SB"
 
 printf '\npass=%s fail=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

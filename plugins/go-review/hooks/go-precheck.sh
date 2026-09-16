@@ -145,8 +145,12 @@ if [ "$fresh" -eq 1 ]; then
   #   안전한 쪽으로 실패한다. 알릴 가치가 있는 것은 「물어야 하는데 항목이 없다」와
   #   「남의 계획 옵트인이 남아 있다」 둘이다.
   t_root="$(dirname -- "$base")"
-  tt="$HOME/.claude/skills/go-tester"
-  [ -d "$tt" ] || tt=""
+  # ⭐ 설치 위치는 **찾는다**(2026-09-16). 고정 문자열 `~/.claude/skills/go-tester` 는 심링크
+  #   설치에만 있고, 마켓플레이스로 받으면 그 경로가 없어 이 축이 통째로 조용해졌다 —
+  #   위임이 rc 70 으로 닫히는데 사람은 「켰다」고 믿는다. 근거는 `_plugins.sh` 머리말.
+  . "$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/_plugins.sh" 2>/dev/null || true
+  tt=""
+  command -v sibling_plugin >/dev/null 2>&1 && tt=$(sibling_plugin go-tester tester/_config.py || printf '')
   if [ -n "$tt" ] && [ -f "$tt/tester/_config.py" ]; then
     t_mode=$(CLAUDE_PROJECT_DIR="$t_root" python3 "$tt/tester/_config.py" 2>/dev/null | grep -E '^TESTER_MODE=' | head -1 | cut -d= -f2- | tr -d "'")
     case "$t_mode" in

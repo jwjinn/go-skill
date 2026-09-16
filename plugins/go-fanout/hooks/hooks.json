@@ -1,0 +1,23 @@
+{
+  "description": "go-fanout 게이트 — 파도의 두 끝을 막는다: 워커의 미답 질문(worker-question-gate) · 마감하지 않은 자원(wave-close-gate)",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worker-question-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "워커 질문 확인(답 없는 question 이 남았나)"
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/wave-close-gate.sh\"",
+            "timeout": 20,
+            "statusMessage": "파도 마감 확인(회수되지 않은 자원이 남았나)"
+          }
+        ]
+      }
+    ]
+  }
+}

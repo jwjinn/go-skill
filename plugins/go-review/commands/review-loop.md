@@ -378,7 +378,8 @@ python3 ${CLAUDE_PLUGIN_ROOT}/review/_render.py "$ROUND/merged.json" "$ROUND/mer
    ⭐ 테스트 에이전트를 켰으면(`/go` §0-d) 이 재실행을 위임할 수 있다 — **판독만** 넘기는 것이므로
    `--mode run` 이다:
    ```bash
-   bash ~/.claude/skills/go-tester/tester/tester.sh --mode run \
+   TT=$(bash "${CLAUDE_PLUGIN_ROOT}/hooks/_plugins.sh" go-tester tester/tester.sh)   # 설치 위치를 찾는다
+   bash "$TT/tester/tester.sh" --mode run \
      --task /tmp/rerun.txt --gate '<게이트 명령>' --cwd "$CLAUDE_PROJECT_DIR"
    ```
    ⚠ 이것은 **재리뷰가 아니다.** 게이트를 돌려 통과 여부를 읽는 것이고, 4번의 금지는 「리뷰를 한

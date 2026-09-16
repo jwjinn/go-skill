@@ -107,7 +107,11 @@ go 를 돌릴 때 **먼저 다 정하고** 돌릴 수 있도록 파이프라인�
 시간이 흐르고, 그 사이 로컬 모델이 내려가거나 사람의 판단이 바뀔 수 있기 때문이다.
 
 ```bash
-TT=~/.claude/skills/go-tester
+# ⭐ 설치 위치는 **찾는다** — 고정 경로를 적지 마라(2026-09-16).
+#   심링크 설치는 `~/.claude/skills/go-tester`, 마켓플레이스 설치는
+#   `~/.claude/plugins/cache/<마켓>/go-tester/<버전>` 이다. 고정 문자열을 적으면 후자에서
+#   「go-tester 없음」으로 읽혀 위임이 조용히 rc 70 으로 닫힌다 — 켰다고 믿는데 안 쓴다.
+TT=$(bash "${CLAUDE_PLUGIN_ROOT}/hooks/_plugins.sh" go-tester tester/_config.py) || TT=""
 python3 "$TT/tester/_config.py" | grep -E '^TESTER_(ENABLED|MODE|ENDPOINT|MODEL)='
 bash "$TT/tester/probe.sh" --for-plan          # heartbeat + 엔드포인트가 한 줄로
 ls -l ~/.config/go-skill/tester.env 2>/dev/null && echo "키 있음" || echo "키 없음"
@@ -134,7 +138,7 @@ grep -c '위임 가능' "$CLAUDE_PROJECT_DIR/.claude/plan-active.md"   # 이 계
 
 ```bash
 mkdir -p "$CLAUDE_PROJECT_DIR/.claude/tester"
-FP=$(python3 ~/.claude/skills/go-tester/tester/_config.py | grep '^TESTER_PLAN_FINGERPRINT=' | cut -d= -f2- | tr -d "'")
+FP=$(python3 "$TT/tester/_config.py" | grep '^TESTER_PLAN_FINGERPRINT=' | cut -d= -f2- | tr -d "'")
 cat > "$CLAUDE_PROJECT_DIR/.claude/tester/opt-in.json" <<JSON
 {"answer":"use","plan_file":"$CLAUDE_PROJECT_DIR/.claude/plan-active.md","plan_fingerprint":"$FP","heartbeat_at":"$(date -Iseconds)"}
 JSON
@@ -232,7 +236,7 @@ rm -f "$CLAUDE_PROJECT_DIR/.claude/tester/opt-in.json"
    게이트 실행만 넘길 때는 `run` 모드다(파일을 만들지 않으므로 계획 표기가 없어도 된다).
 
    ```bash
-   bash ~/.claude/skills/go-tester/tester/tester.sh \
+   bash "$TT/tester/tester.sh" \
      --task /tmp/task.txt --mode full --gate '<이 슬라이스의 게이트 명령>' \
      --cwd "$CLAUDE_PROJECT_DIR" --out /tmp/tester-<단계>.json
    ```
@@ -260,7 +264,7 @@ rm -f "$CLAUDE_PROJECT_DIR/.claude/tester/opt-in.json"
 ```markdown
 ## C — 자원 회수
 - [ ] C1 파도 끝마다 그 파도 워커의 `orca orchestration worker-release` · `worker-list` 로 잔존 0 확인
-- [ ] C2 마지막에 `bash ~/.claude/skills/go-fanout/cleanup.sh --run <run_id> --apply` · 아카이브 확인 · 워크트리 0
+- [ ] C2 마지막에 `bash "$(bash "${CLAUDE_PLUGIN_ROOT}/hooks/_plugins.sh" go-fanout scripts/cleanup.sh)/scripts/cleanup.sh" --run <run_id> --apply` · 아카이브 확인 · 워크트리 0
 ```
 
 사용자 지시: 「종료가 되면 자원을 회수하는 것도 포함해서.」 계획 단계(`plan.md` §6-c)에서 이 절을

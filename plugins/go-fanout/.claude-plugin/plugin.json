@@ -1,0 +1,18 @@
+{
+  "name": "go-fanout",
+  "version": "0.1.0",
+  "description": "go-review 체인을 여러 워커에 fan-out 한다. 파일 집합이 겹치지 않는 작업 N개를 각자의 워크트리에 띄우고, 각 워커가 자기 세션 안에서 계획 승인 → 구현 → 교차 리뷰 1회 → 반영 → PR 까지 완주하게 한 뒤, 코디네이터가 결과를 거두어 합본 리뷰 하나를 돌린다. 사람은 앞(협의문)과 뒤(최종 보고)에만 있다. Stop 훅 둘이 파도의 두 끝을 막는다 — 워커가 답을 기다리는데 코디네이터가 턴을 끝내는 것(worker-question-gate), 그리고 파도가 끝났는데 자원을 회수하지 않는 것(wave-close-gate). 둘 다 이 세션이 관여한 run 만 보고, 코디네이터가 닫을 수 없는 자원은 미회수로 세지 않는다. ⚠ Orca 런타임이 필요하다(워커를 그것으로 띄운다) — `orca status` 가 안 되면 이 플러그인은 아무것도 하지 못한다. 대조군 78검사.",
+  "author": {
+    "name": "jwjinn"
+  },
+  "homepage": "https://github.com/jwjinn/go-skill",
+  "repository": "https://github.com/jwjinn/go-skill",
+  "license": "MIT",
+  "keywords": [
+    "orchestration",
+    "parallel",
+    "worktree",
+    "code-review",
+    "hooks"
+  ]
+}

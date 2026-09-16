@@ -9,10 +9,27 @@
 /plugin marketplace add jwjinn/go-skill
 /plugin install go-review@jwjinn-go-skill
 /plugin install go-tester@jwjinn-go-skill    # 선택 — 테스트를 로컬 모델에 위임한다
+/plugin install go-fanout@jwjinn-go-skill    # 선택 — 그 체인을 여러 워커에 fan-out 한다
 ```
+
+| 플러그인 | 무엇 | 없어도 되나 | 추가로 필요한 것 |
+|---|---|---|---|
+| `go-review` | 계획 승인 · 완주 집행 · 교차 리뷰 | **본체** | `jq` · `python3` · `git` |
+| `go-tester` | 테스트를 로컬 모델에 위임 | 선택 | 로컬 모델 엔드포인트 · `uvx` · `curl` |
+| `go-fanout` | 그 체인을 워커 N명에 fan-out | 선택 | **Orca 런타임** |
 
 `go-tester` 는 **기본이 꺼져 있다.** 계획을 만들 때와 돌릴 때 사람이 두 번 답해야 켜지고,
 답하지 않으면 호출이 0회다. 자세한 것은 [plugins/go-tester/README.md](plugins/go-tester/README.md).
+
+⛔ **`go-fanout` 은 Orca 가 있어야 한다.** 워커를 Orca 오케스트레이션으로 띄우므로 `orca` 명령이
+없으면 아무것도 하지 못한다. 설치돼 있는지는 한 줄로 확인한다 — `orca status --json`.
+(훅은 orca 가 없으면 **조용히 통과한다.** orca 를 안 쓰는 세션을 멈춰 세우지 않기 위해서인데,
+그 대가로 「안 깔렸다」와 「깔렸는데 할 일이 없다」가 같은 침묵으로 보인다. 위 한 줄이 그것을 가른다.)
+
+⚠ **셋을 섞어 설치하지 마라 — 같은 방식으로 받아라.** 셋은 서로를 **형제 자리**에서 찾는다.
+마켓플레이스로 받으면 셋 다 `~/.claude/plugins/cache/...` 에 형제로 놓이고, 개발용 심링크로
+쓰면 셋 다 `~/.claude/skills/` 에 형제로 놓인다. 하나만 심링크이고 나머지가 마켓플레이스면
+그 하나가 형제를 못 찾는다. 찾는 규칙의 정본은 `plugins/go-review/hooks/_plugins.sh` 하나다.
 
 설치 직후 한 줄로 이 기계에서 실제로 도는지 확인한다(중요 — 아래 [의존성](#의존성--설치됐다와-돌아간다는-다르다) 절):
 
@@ -78,6 +95,8 @@ flowchart TD
 | 턴 종료 | `plan-file-gate.sh` | 계획 파일에 미완료 체크박스가 남았으면 거부한다 | **예** |
 | 턴 종료 | `todo-completion-gate.sh` | 마지막 `TodoWrite` 에 미완료가 남았으면 거부한다 | **예** |
 | 턴 종료 | `review-gate.sh` | 확정 결함이 미해결이면 거부한다 | **예** |
+| 턴 종료 | `worker-question-gate.sh` | 워커가 답을 기다리는데 턴을 끝내면 거부한다(go-fanout) | **예** |
+| 턴 종료 | `wave-close-gate.sh` | 파도가 끝났는데 자원을 안 치웠으면 거부한다(go-fanout) | **예** |
 
 차단 축이 둘인 이유는 실측이다. `TodoWrite` 도구가 **하네스 빌드에 아예 없는 세션**이
 나왔고, 그때 도구 축은 「계획을 안 세운 턴」으로 보고 조용히 통과했다. 12단계 계획이
@@ -142,6 +161,10 @@ go-review/
 └── scripts/
     ├── deps-check.sh          이 기계에서 실제로 도는지 센다
     └── deps-check.test.sh     그 검사기의 대조군 41검사
+
+`hooks/_plugins.sh` 는 **형제 플러그인의 설치 위치**를 찾는다. 셋은 한 저장소에서 나오므로
+언제나 형제 자리에 있고, 설치 방식마다 「형제」의 모양만 다르다. 그 규칙의 정본은 그 파일
+하나다 — 문서·훅이 각자 경로를 적으면 설치 모양이 하나 늘 때 반드시 한둘을 놓친다.
 ```
 
 설치해도 **프로젝트 파일은 하나도 만들지 않는다.** 상태 파일(`.claude/plan-active.md`·

@@ -173,7 +173,11 @@ go 를 돌릴 때 **먼저 다 정하고** 돌릴 수 있게」. `/go` 는 이 �
 ##### 1단계 — 승인을 받는다 (넷을 함께 보여라)
 
 ```bash
-TT=~/.claude/skills/go-tester
+# ⭐ 설치 위치는 **찾는다** — 고정 경로를 적지 마라(2026-09-16).
+#   심링크 설치는 `~/.claude/skills/go-tester`, 마켓플레이스 설치는
+#   `~/.claude/plugins/cache/<마켓>/go-tester/<버전>` 이다. 고정 문자열을 적으면 후자에서
+#   「go-tester 없음」으로 읽혀 위임이 조용히 rc 70 으로 닫힌다 — 켰다고 믿는데 안 쓴다.
+TT=$(bash "${CLAUDE_PLUGIN_ROOT}/hooks/_plugins.sh" go-tester tester/_config.py) || TT=""
 python3 "$TT/tester/_config.py" | grep -E '^TESTER_(ENABLED|MODE|ENDPOINT|MODEL)='
 bash "$TT/tester/probe.sh" --for-plan     # heartbeat + 엔드포인트가 한 줄로 나온다
 ls -l ~/.config/go-skill/tester.env 2>/dev/null && echo "키 파일 있음" || echo "키 파일 없음"

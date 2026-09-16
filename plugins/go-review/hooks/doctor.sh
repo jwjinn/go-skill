@@ -64,6 +64,21 @@ for d in commands agents hooks review; do
     [ -f "$SELF/../$d/$b" ] && copies="$copies $d/$b"
   done
 done
+# ⭐ **형제 플러그인의 훅도 본다**(2026-09-16). go-fanout 의 게이트가 프로젝트로 복사돼 정본이
+#   둘이 된 적이 있다 — 그 사본은 워커 워크트리로 그대로 퍼지고, 고칠 때 한쪽만 고치면 다음
+#   레포가 낡은 것을 받는다. 이름이 go-review 것이 아니라서 위 대조에 걸리지 않았다.
+#   ⚠ 설치돼 있을 때만 대조한다(미설치를 결함으로 말하지 않는다 — go-fanout 은 선택이다).
+. "$SELF/_plugins.sh" 2>/dev/null || true
+if command -v sibling_plugin >/dev/null 2>&1 && [ -d "$ROOT/.claude/hooks" ]; then
+  _gf=$(sibling_plugin go-fanout hooks/hooks.json 2>/dev/null || printf '')
+  if [ -n "$_gf" ]; then
+    for f in "$ROOT/.claude/hooks"/*; do
+      [ -f "$f" ] || continue
+      b=$(basename "$f")
+      [ -f "$_gf/hooks/$b" ] && copies="$copies hooks/$b(go-fanout)"
+    done
+  fi
+fi
 if [ -n "$copies" ]; then
   fails "플러그인과 같은 이름의 로컬 사본:${copies} — 정본이 둘이다. 지우고 플러그인만 남겨라"
 else
