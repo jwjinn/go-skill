@@ -325,17 +325,20 @@ cleanup
 # 실패한다). 그래서 재는 것은 「알리는가」이고, 대조군은 **조용해야 하는 조건**이다.
 echo "=== ⭐ 테스트 에이전트 축 — ask 인데 Q-T 가 없으면 알린다"
 
-tester_stub() { # tester_stub <MODE> — go-tester 를 흉내 내는 최소 구조
-  td="$T/fake-skills/go-tester/tester"
-  mkdir -p "$td"
-  printf '%s\n' "print('TESTER_MODE=$1')" > "$td/_config.py"
-  printf '%s\n' "print('TESTER_ENABLED=0')" >> "$td/_config.py"
-  HOME_ORIG="$HOME"
-  export HOME="$T/fakehome"
-  mkdir -p "$HOME/.claude/skills"
-  ln -sfn "$T/fake-skills/go-tester" "$HOME/.claude/skills/go-tester"
+# ⛔⛔ 가짜 `_config.py` 로 스텁하려던 첫 판은 **효력이 없었다**(2026-09-16 실측). `sibling_plugin`
+#   은 HOME 이 아니라 **이 훅의 설치 위치**에서 형제를 찾으므로, HOME 을 바꿔도 진짜 go-tester 를
+#   집었다. 즉 이 축의 검사들은 가짜가 아니라 **그때그때의 실제 구성**을 보고 있었다 — 내가 만든
+#   스텁이 죽은 코드였고 아무도 몰랐다(「정본이 있는데 안 쓰인다」의 변종).
+#   ⇒ 진짜 `_config.py` 가 읽는 **프로젝트 구성 파일**을 쓴다. 그것이 실제 조건과도 같다.
+tester_stub() { # tester_stub <ask|on|off> — 연결된 상태를 만든다(endpoint·model 이 있어야 ask 가 ask 다)
+  mkdir -p "$T/.claude/tester"
+  case "$1" in
+    ask) printf '%s\n' '{"endpoint":"http://example.invalid/v1","model":"qwen-test"}' > "$T/.claude/tester/config.json" ;;
+    *)   printf '{"enabled":"%s","endpoint":"http://example.invalid/v1","model":"qwen-test"}\n' "$1" > "$T/.claude/tester/config.json" ;;
+  esac
 }
-tester_unstub() { [ -n "${HOME_ORIG:-}" ] && export HOME="$HOME_ORIG"; }
+tester_unconfigured() { rm -f "$T/.claude/tester/config.json"; }   # 연결 안 된 상태
+tester_unstub() { :; }
 
 setup
 printf -- '# 계획\n\n## 목표 계약\n원 요청: "x"\n\n## 결정 필요(승인 전)\n- [x] Q1 [질문] 무엇 — 답: 그것\n\n## 병렬 배치\n단독 — 작다\n\n## P0\n- [ ] a\n- [ ] b\n' \
@@ -414,6 +417,56 @@ printf -- '# 계획\n\n작업 위치: %s\n\n## 목표 계약\n원 요청: "x"\n\
 printf '%s\n' '{"type":"user","message":{"content":"해줘"}}' "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"$T/.claude/plans/20260916-mine/plan.md\",\"content\":\"x\"}}]}}" > "$T/tr-plan.jsonl"
 out=$(runtr "/go" "$T/tr-plan.jsonl")
 printf '%s' "$out" | grep -q '기존 계획.*20260916-mine/plan.md' && ok "plans/ 의 내 계획 → 경로 ①(채택)" || ng "plans 경로 ①" "$out"
+cleanup
+
+echo "=== ⭐⭐ go-tester 미연결 안내 — 묻지 않고 한 번만 알린다 (2026-09-16 · 사용자 지시)"
+# 사용자 지적: 「최초로 로컬 모델을 쓰겠다고 하면 endpoint + API 키를 입력받나?」 → 받지 않는다.
+# 구성이 비면 판정이 `ask` 인 채 `no_endpoint` 가 되고, 종전 문구는 「Q-T 를 넣어라」라고 말했다.
+# 넣어도 못 쓰므로 **틀린 사유**였고, 처음 쓰는 사람은 질문이 왜 안 뜨는지 알 수 없었다.
+hintrun(){ # hintrun <session_id>
+  python3 -c "import json,sys;print(json.dumps({'prompt':'/go','session_id':sys.argv[1],'transcript_path':''}))" "$1" \
+    | CLAUDE_PROJECT_DIR="$T" bash "$HOOK" 2>/dev/null; }
+TESTY="$DRAFT"'- [ ] P0-3 테스트와 대조군을 붙인다
+'
+PLAINY="$DRAFT"'- [ ] P0-3 문구를 다듬는다
+'
+rm -f "${TMPDIR:-/tmp}"/claude-tester-hint-t7* 2>/dev/null
+
+setup; tester_unconfigured; printf '%s' "$TESTY" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(hintrun t7-a)
+printf '%s' "$out" | grep -q 'go-tester 가 아직 연결되지 않았다' && ok "구성이 비고 테스트 항목이 있으면 알린다" || ng "미연결 안내 없음" "$out"
+printf '%s' "$out" | grep -q 'tester.env' && ok "키를 둘 자리를 말한다" || ng "키 자리 미안내" "$out"
+printf '%s' "$out" | grep -q 'config.json 에 적지 마라' && ok "⭐ 키를 구성에 적지 말라고 경고한다(그 파일은 저장소에 들어간다)" || ng "키 경고 없음" "$out"
+printf '%s' "$out" | grep -q 'Q-T)이 없다' && ng "⛔ 못 쓰는 상태인데 Q-T 를 넣으라고 한다(틀린 사유)" "$out" || ok "⛔ 그때는 Q-T 를 요구하지 않는다"
+
+echo "--- 세션당 한 번"
+out=$(hintrun t7-a)
+printf '%s' "$out" | grep -q 'go-tester 가 아직 연결되지 않았다' && ng "같은 세션에서 또 알린다(소음)" "$out" || ok "⭐ 같은 세션 2회차는 조용하다"
+out=$(hintrun t7-b)
+printf '%s' "$out" | grep -q 'go-tester 가 아직 연결되지 않았다' && ok "⭐ 다른 세션에는 다시 알린다" || ng "다른 세션인데 조용하다" "$out"
+cleanup
+
+echo "--- 위임할 것이 없으면 조용하다(쓸 일 없는데 설정을 권하지 않는다)"
+rm -f "${TMPDIR:-/tmp}"/claude-tester-hint-t7* 2>/dev/null
+setup; tester_unconfigured; printf '%s' "$PLAINY" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(hintrun t7-c)
+printf '%s' "$out" | grep -q 'go-tester 가 아직 연결되지 않았다' && ng "테스트 항목이 없는데 알렸다" "$out" || ok "테스트 항목이 없으면 조용하다"
+cleanup
+
+echo "--- ⭐ 사보타주 — 미연결 판별을 지우면 옛 동작(틀린 Q-T 안내)으로 돌아간다"
+rm -f "${TMPDIR:-/tmp}"/claude-tester-hint-t7* 2>/dev/null
+setup; tester_unconfigured; printf '%s' "$TESTY" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+# ⚠⚠ 사보타주본을 **혼자 떼어 두면 안 된다.** 이 훅은 `dirname $0` 에서 `_planpath.sh`·
+#   `_plugins.sh` 를 읽으므로, 임시 경로에 스크립트만 복사하면 초안 해석기가 통째로 없어져
+#   출력이 0 이 된다 — 사보타주가 「탐지기를 껐다」가 아니라 「스크립트를 죽였다」가 되고,
+#   그러면 이 검사는 무엇도 증명하지 못한다(2026-09-16 실측으로 밟았다).
+mkdir -p "$T/sabdir"
+cp "$(dirname "$HOOK")/_planpath.sh" "$(dirname "$HOOK")/_plugins.sh" "$T/sabdir/" 2>/dev/null
+sed 's@no_endpoint@절대안맞는사유@' "$HOOK" > "$T/sabdir/go-precheck.sh"
+out=$(python3 -c "import json;print(json.dumps({'prompt':'/go','session_id':'t7-d','transcript_path':''}))" \
+      | CLAUDE_PROJECT_DIR="$T" bash "$T/sabdir/go-precheck.sh" 2>/dev/null)
+printf '%s' "$out" | grep -q 'Q-T)이 없다' && ok "사보타주하면 못 쓰는 상태에서 Q-T 를 요구한다(탐지기가 살아 있다)" || ng "사보타주해도 그대로다" "$out"
+rm -f "${TMPDIR:-/tmp}"/claude-tester-hint-t7* 2>/dev/null
 cleanup
 
 echo "=== ⭐⭐ 형제 플러그인 탐색 — 설치 모양 둘을 다 찾는다 (2026-09-16)"

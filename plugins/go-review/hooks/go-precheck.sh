@@ -57,6 +57,13 @@ transcript=$(printf '%s' "$input" | python3 -c 'import json,sys
 try: d=json.load(sys.stdin)
 except Exception: sys.exit(0)
 print(d.get("transcript_path") or "")' 2>/dev/null)
+# ⭐ 세션당 1회 안내에 쓴다(아래 go-tester 미연결 안내). 못 얻으면 기록 경로로 대신한다 —
+#   그것도 없으면 매 턴 알리게 되므로 「안 알림」쪽으로 접는다.
+session_id=$(printf '%s' "$input" | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
+print(d.get("session_id") or "")' 2>/dev/null)
+[ -n "$session_id" ] || session_id=$(printf '%s' "$transcript" | sed 's@.*/@@; s@\.jsonl$@@')
 draft_err="${TMPDIR:-/tmp}/claude-draft-pick.$$"
 draft=$(draft_pick "$base" "$transcript" 2>"$draft_err") || draft=''
 n_fdraft=$(grep -c '^foreign:' "$draft_err" 2>/dev/null || printf '0'); rm -f "$draft_err"
@@ -182,7 +189,32 @@ if [ "$fresh" -eq 1 ]; then
   tt=""
   command -v sibling_plugin >/dev/null 2>&1 && tt=$(sibling_plugin go-tester tester/_config.py || printf '')
   if [ -n "$tt" ] && [ -f "$tt/tester/_config.py" ]; then
-    t_mode=$(CLAUDE_PROJECT_DIR="$t_root" python3 "$tt/tester/_config.py" 2>/dev/null | grep -E '^TESTER_MODE=' | head -1 | cut -d= -f2- | tr -d "'")
+    t_out=$(CLAUDE_PROJECT_DIR="$t_root" python3 "$tt/tester/_config.py" 2>/dev/null)
+    t_mode=$(printf '%s\n' "$t_out" | grep -E '^TESTER_MODE=' | head -1 | cut -d= -f2- | tr -d "'")
+    t_reason=$(printf '%s\n' "$t_out" | grep -E '^TESTER_REASON=' | head -1 | cut -d= -f2-)
+
+    # ⭐⭐ 연결이 안 된 것과 「안 쓰기로 한 것」은 다르다 (2026-09-16 · 사용자 지적)
+    #   구성의 endpoint·model 이 비어 있으면 판정은 `ask` 인 채로 `no_endpoint` 가 된다. 그 상태에서
+    #   종전 문구는 「Q-T 를 넣어라」라고 말했는데, **넣어도 못 쓴다** — 틀린 사유는 없는 것보다 나쁘다.
+    #   그리고 이쪽이 처음 쓰는 사람이 늘 만나는 자리다: 질문이 안 뜨는 이유를 아무도 말해 주지 않아
+    #   「이 기능이 없나 보다」로 읽힌다.
+    #   ⇒ **묻지 않고 한 번만 알린다**(사용자 결정: 「묻지는 않고 알리기만」). 세션당 1회.
+    #   ⚠ 계획에 위임할 만한 것이 없으면 알리지 않는다 — 쓸 일이 없는데 설정을 권하는 것은 소음이다.
+    case "$t_reason" in
+      *no_endpoint*)
+        t_stamp="${TMPDIR:-/tmp}/claude-tester-hint-${session_id:-nosession}"
+        if [ ! -f "$t_stamp" ] && grep -qiE '테스트|대조군|게이트|test' "$draft" 2>/dev/null; then
+          : > "$t_stamp" 2>/dev/null || true
+          printf 'ℹ 이 계획에 테스트·대조군 항목이 있는데 **go-tester 가 아직 연결되지 않았다**(endpoint·model 이 비어 있다).\n'
+          printf '   연결하면 테스트 작성·실행·대조군 증명을 로컬 모델에 넘길 수 있다 — 그 본문과 실행 로그가 이 세션의 문맥에 들어오지 않는다.\n'
+          printf '   쓰려면 둘을 채워라(지금 묻지 않는다 · 채우면 그때부터 `/plan` 이 Q-T 로 묻는다):\n'
+          printf '     ① %s/tester/config.json 에 endpoint·model\n' "$base"
+          printf '     ② ~/.config/go-skill/tester.env 에 GO_TESTER_API_KEY (chmod 600)\n'
+          printf '   ⚠ 키를 config.json 에 적지 마라 — 그 파일은 저장소에 들어간다. 키를 두는 자리는 ② 하나다.\n'
+          printf '   쓸 생각이 없으면 이 안내는 무시해라(세션당 한 번만 나온다).\n'
+        fi
+        ;;
+      *)
     case "$t_mode" in
       ask)
         if grep -qE '^[-*][[:space:]]*\[[ xX]\][[:space:]]*Q-T|Q-T[[:space:]]*\[질문\]|테스트 에이전트' "$draft" 2>/dev/null; then
@@ -195,6 +227,8 @@ if [ "$fresh" -eq 1 ]; then
         ;;
       on|off)
         printf '✅ go-tester 는 이 프로젝트에서 `%s` 로 고정돼 있다 — 묻지 않는다(사람이 이미 정했다).\n' "$t_mode"
+        ;;
+    esac
         ;;
     esac
     # 옵트인 잔재 — 다른 계획의 기록이 남아 있으면 알린다.
