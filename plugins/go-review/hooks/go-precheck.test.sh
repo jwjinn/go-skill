@@ -585,5 +585,39 @@ out=$(run "/go-review:go 전부")
 printf '%s' "$out" | grep -q '위임 판정' && ng "작은 계획에 발화" "$out" || ok "⑥ 항목 4개 미만이면 조용하다"
 cleanup
 
+# ⑦ ⭐⭐ 고정 절(`## R — 리뷰` · `## C — 자원 회수`)은 판정을 요구하지 않는다
+#   go.md §3·§3-c 가 그 두 절의 형식을 정해 주는데 거기엔 판정 표기가 없다. 빼지 않으면
+#   **모든 계획이 언제나 붉고**, 언제나 붉은 검사는 아무도 보지 않는다.
+#   실측(2026-09-16): 이 축을 처음 붙였을 때 실제 계획에서 빠진 5건이 전부 그 두 절이었다.
+setup
+{ printf '%s' "$GRID_HEAD"
+  printf -- '- [ ] P1-1 하나\n      · **로컬 구현** — 파일 1\n'
+  printf -- '- [ ] P1-2 둘\n      · **세션 모델** — 되돌리기 어렵다\n'
+  printf -- '- [ ] P1-3 셋\n      · **테스트부터(위임 가능 full)** — 순수 테스트다\n'
+  printf -- '- [ ] P1-4 넷\n      · **명세부터** — 경계가 안 정해졌다\n'
+  printf '\n## R — 리뷰\n- [ ] R1 review-loop 1회\n- [ ] R2 must_fix 반영 후 게이트 재통과\n'
+  printf '\n## C — 자원 회수\n- [ ] C1 worker-release\n- [ ] C2 cleanup --apply\n- [ ] C3 opt-in.json 삭제\n'
+} > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go-review:go 전부")
+printf '%s' "$out" | grep -q '위임 판정: 작업 항목 4개 전부에 있다' \
+  && ok "⑦ ⭐⭐ R·C 절의 5항목은 판정 대상에서 뺀다" || ng "고정 절 오탐" "$out"
+cleanup
+
+# ⑦-b 대조군 — 고정 절 **밖**의 항목은 그대로 센다(제외가 너무 넓어지지 않았나)
+setup
+{ printf '%s' "$GRID_HEAD"
+  printf -- '- [ ] P1-1 하나\n      · **로컬 구현** — 파일 1\n'
+  printf -- '- [ ] P1-2 둘 (판정 없음)\n'
+  printf -- '- [ ] P1-3 셋\n      · **세션 모델** — 되돌리기 어렵다\n'
+  printf -- '- [ ] P1-4 넷\n      · **명세부터** — 경계가 안 정해졌다\n'
+  printf '\n## R — 리뷰\n- [ ] R1 review-loop 1회\n'
+  printf '\n## P2 — 고정 절 다음에도 작업 절이 올 수 있다\n'
+  printf -- '- [ ] P2-1 다섯 (판정 없음)\n'
+} > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go-review:go 전부")
+printf '%s' "$out" | grep -q '3/5 항목' \
+  && ok "⑦-b 고정 절 뒤에 온 작업 절은 다시 센다(제외가 절 경계에서 끝난다)" || ng "제외 범위" "$out"
+cleanup
+
 printf '\npass=%s fail=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

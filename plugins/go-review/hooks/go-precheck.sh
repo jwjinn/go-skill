@@ -191,13 +191,25 @@ if [ "$fresh" -eq 1 ]; then
   #   「판정을 안 적었다」가 아니라 「옛 형식으로 적었다」이기 때문이다.
   g_verdicts=$(grep -cE '^[[:space:]]*·[[:space:]]*\*\*(명세부터|테스트부터|로컬 구현|미측정|세션 모델|위임 가능|일부 위임|위임 불가)' "$draft" 2>/dev/null || printf '0')
   case "$g_verdicts" in ''|*[!0-9]*) g_verdicts=0 ;; esac
-  # 작업 항목 수 = 전체 체크박스 − 결정 절의 체크박스(결정 항목은 판정 대상이 아니다)
+  # 작업 항목 수 = 전체 체크박스 − 결정 절 − **고정 절**(`## R — 리뷰` · `## C — 자원 회수`)
+  #
+  # ⭐ 고정 절을 빼는 이유: 그 둘은 go.md §3·§3-c 가 **형식까지 정해 주는** 절이고 계획마다
+  #   내용이 같다(리뷰 1회 · release · cleanup). 거기에 판정을 요구하면 규약끼리 어긋난다 —
+  #   go.md 가 주는 템플릿에는 판정 표기가 없는데 이 훅이 그것을 빠졌다고 말하게 된다.
+  #   실측(2026-09-16): 이 축을 처음 붙였을 때 실제 계획에서 빠진 5건이 **전부** 그 두 절이었다.
+  #   ⚠ 그리고 이 부류는 매 계획에서 반복되므로, 빼지 않으면 언제나 붉고 그러면 아무도 안 본다.
   g_dec_boxes=0
   if [ -n "$dec" ]; then
     g_dec_boxes=$(printf '%s\n' "$dec" | grep -cE '^[[:space:]]*[-*+][[:space:]]+\[.\]' 2>/dev/null || printf '0')
     case "$g_dec_boxes" in ''|*[!0-9]*) g_dec_boxes=0 ;; esac
   fi
-  g_work=$((boxes - g_dec_boxes))
+  g_fixed=$(awk '
+    /^##[[:space:]]*[RC][[:space:]]*([—-].*)?$/ { f=1; next }
+    /^##[[:space:]]/                            { f=0 }
+    f && /^[[:space:]]*[-*+][[:space:]]+\[.\]/  { n++ }
+    END { print n+0 }' "$draft" 2>/dev/null || printf '0')
+  case "$g_fixed" in ''|*[!0-9]*) g_fixed=0 ;; esac
+  g_work=$((boxes - g_dec_boxes - g_fixed))
   [ "$g_work" -ge 0 ] || g_work=0
   if [ "$g_work" -ge 4 ]; then
     if [ "$g_verdicts" -eq 0 ]; then
