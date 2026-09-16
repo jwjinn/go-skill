@@ -333,8 +333,13 @@ mk_tr "$D/tr-c3.jsonl" "해줘" '{"type":"assistant","message":{"content":[{"typ
 run "② Skill 도구로 go-review:go → 차단" "$PSC" "$D/tr-c3.jsonl" s-sc4 BLOCK
 mk_tr "$D/tr-c4.jsonl" "해줘" '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/w/.claude/plan-active.md","old_string":"[ ]","new_string":"[x]"}}]}}'
 run "③ 계획 파일을 Edit → 차단" "$PSC" "$D/tr-c4.jsonl" s-sc5 BLOCK
+# ⛔ Bash 재지향은 채택으로 **보지 않는다**(2026-09-16 오후). 첫 판은 이 케이스를 BLOCK 으로 잠갔는데,
+#   그 판별이 명령 문자열을 보는 탓에 게이트를 테스트하던 세션이 자기 픽스처 문자열로 「채택」이 되어
+#   남의 계획 35개에 세 번 막혔다(Write/Edit 0 · go 0). 아래 대조군 둘이 그 오탐을 잠근다.
 mk_tr "$D/tr-c5.jsonl" "해줘" '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cat > .claude/plan-active.md <<EOF\n- [ ] a\nEOF"}}]}}'
-run "③ Bash 재지향으로 계획 파일을 씀 → 차단" "$PSC" "$D/tr-c5.jsonl" s-sc6 BLOCK
+run "③-x Bash 재지향은 채택이 아니다 → 알림(차단 아님)" "$PSC" "$D/tr-c5.jsonl" s-sc6 WARN
+mk_tr "$D/tr-c6.jsonl" "해줘" '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"printf %s\\n {\"input\":{\"command\":\"cat > .claude/plan-active.md <<EOF\"}} > $D/fixture.jsonl"}}]}}'
+run "③-y ⭐ 픽스처 문자열 안의 재지향(게이트를 테스트하는 세션) → 채택 아님" "$PSC" "$D/tr-c6.jsonl" s-sc7 WARN
 
 # 채택이 **아닌** 것 — 이것이 없으면 위 다섯은 「아무 도구 호출이나 있으면 막는다」와 구분되지 않는다
 rm -f "${TMPDIR:-/tmp}"/claude-plan-foreign-s-sn* 2>/dev/null

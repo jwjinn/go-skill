@@ -152,8 +152,14 @@ plan_boxes_excluding_decisions() {
 #   ① 사람 프롬프트의 go 체인 호출 — `<command-name>/go-review:go</command-name>` ·
 #      `<command-name>/go</command-name>` · 원문 `/go …` · (리뷰 파일용) `…/go-review:review-loop`
 #   ② `Skill` 도구로 `go-review:go` · `go-review:review-loop` 호출
-#   ③ 그 파일을 **쓴** 도구 호출 — Write/Edit/MultiEdit 의 file_path, 또는 Bash 의 `> <파일>` 재지향.
+#   ③ 그 파일을 **쓴** 도구 호출 — Write/Edit/MultiEdit 의 file_path.
 #      ⚠ 읽기(`cat`·`head`·`grep`)는 채택이 아니다 — 점검하는 세션이 딱 그것을 한다.
+#      ⛔ Bash 의 `> <파일>` 재지향은 **보지 않는다**(2026-09-16 오후 · 첫 판에서 봤다가 뺐다).
+#        이유: 그 판별은 명령 **문자열**을 보므로, 게이트를 점검·테스트하는 세션이 픽스처로
+#        `printf '… cat > .claude/plan-active.md …'` 를 치면 그것을 「계획 파일을 썼다」로 읽는다.
+#        실측: 그 세션이 남의 계획 35개로 세 번 막혔다 — Write/Edit 0회 · go 호출 0회였다.
+#        「안전한 방향의 오탐」이라 두었는데, 게이트를 고치는 세션이 정확히 그 함정에 걸린다.
+#        Bash 로 계획 파일을 쓰는 세션은 사실상 없다(/go·/plan 이 Write 를 쓴다) — 잃는 것이 없다.
 #   ⚠ `/go-review:plan` 은 채택이 아니다(초안을 만드는 단계다).
 #
 # 반환: 0 = 채택 흔적 있음(무장) · 1 = 사람 발화는 있는데 흔적 없음(남의 것) ·
@@ -182,13 +188,10 @@ plan_session_claims() {   # <transcript> <파일 basename …>
                  or test("(^|\n)[[:space:]]*/go(-review:go|-review:review-loop)?([[:space:]]|$)"));
     def names: ($names | split(" "));
     def hits_name($p): (names | any(. as $n | ($p == $n) or ($p | endswith("/" + $n))));
-    def redirect_writes: (.input.command // "" | . as $c
-               | names | any(. as $n | $c | test(">>?[[:space:]]*[^[:space:]|;&]*" + ($n | gsub("\\."; "\\.")))));
     def claims_tool: (.type=="assistant" and any(.message.content[]?;
         .type=="tool_use" and (
           (.name=="Skill" and ((.input.skill // "") | test("^go-review:(go|review-loop)$")))
           or ((.name=="Write" or .name=="Edit" or .name=="MultiEdit") and hits_name(.input.file_path // ""))
-          or (.name=="Bash" and redirect_writes)
         )));
     fromjson?
     | if (human and go_call) or claims_tool then "yes"
