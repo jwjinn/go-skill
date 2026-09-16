@@ -32,7 +32,7 @@ orca status --json        # ready 인가
 
 | 이벤트 | 훅 | 하는 일 | 막나 |
 |---|---|---|---|
-| 턴 종료 | `hooks/worker-question-gate.sh` | 워커가 답을 기다리는 `question` 이 남았으면 거부한다 | **예** |
+| 턴 종료 | `hooks/coordinator-inbox-gate.sh` | 안 읽은 `worker_done`·`escalation` 과 미답 `question` 이 남았으면 거부한다(이 세션이 관여한 run 만) · 30분 조용한 워커는 알린다 | **예** |
 | 턴 종료 | `hooks/wave-close-gate.sh` | 파도가 끝났는데 자원을 회수하지 않았으면 거부한다 | **예** |
 
 `hooks/hooks.json` 이 등록한다. **프로젝트 `settings.json` 에 손으로 넣지 마라** — 2026-09-16
@@ -65,9 +65,12 @@ python3 scripts/_crossing.py <base ref> <워크트리…>                       
 ## 대조군
 
 ```bash
+bash hooks/_runs.test.sh                  # 16검사(관여 run 판별 — 게이트 둘이 공유한다)
+bash hooks/coordinator-inbox-gate.test.sh # 56검사(축 셋 · run 스코프 · heartbeat · 문서 축)
 bash hooks/wave-close-gate.test.sh        # 31검사
-bash hooks/worker-question-gate.test.sh   # 20검사
+bash scripts/coordinator-send.test.sh     # 35검사(inbox + 터미널 깨우기 · 가짜 orca 가 argv 를 센다)
 bash scripts/cleanup.test.sh              # 27검사
+#                                           합계 165검사
 ```
 
 각 스위트에 사보타주가 들어 있다. 회수 판정을 지우면 다 치운 파도도 막히고, 세션 스코프를

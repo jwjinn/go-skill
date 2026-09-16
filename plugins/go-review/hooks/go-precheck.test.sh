@@ -198,6 +198,51 @@ out=$(run "/go")
 printf '%s' "$out" | grep -q '「## 병렬 배치」 절이 없다(체크박스 4개)' && ok "체크박스 4개인데 절이 없으면 「정하지 않았다」를 알린다" || ng "절 부재 미지적" "$out"
 cleanup
 
+echo "=== ⭐⭐ 병렬 배치 협의(2026-09-16) — 워커가 둘 이상이면 승인 전에 사용자가 배치를 본다"
+# 사용자 지시: 「사용자에게 사전에 어느 플랜들은 병렬로 할거다 안내하면 더 좋을 거 같고」.
+# 병렬은 되돌리기 비싸다(워크트리 N개 · PR N개) — 그래서 결정 절의 항목이어야 한다.
+setup; printf '%s' "$FAN_FULL" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go")
+printf '%s' "$out" | grep -q '워커가 2명인데' && ok "워커 2행 + Q-P 없음 → 협의 항목을 요구한다" || ng "Q-P 부재 미지적" "$out"
+printf '%s' "$out" | grep -q '교차 0 근거' && ok "무엇을 담아야 하는지 말한다" || ng "담을 것 미안내" "$out"
+cleanup
+
+FAN_QP="$FAN_FULL"'
+## 결정 필요(승인 전)
+- [x] Q-P [선택] 병렬 배치 — 권고: W1 = A(P0-1·P0-2) · B(P0-3) · 교차 0 · 대안: 단독 · 닫힘: 답 1개 ✅ 사용자 승인
+'
+setup; printf '%s' "$FAN_QP" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go")
+printf '%s' "$out" | grep -q '병렬 배치 협의 항목(Q-P) 있음' && ok "Q-P 가 있으면 있다고 센다" || ng "Q-P 미인식" "$out"
+printf '%s' "$out" | grep -q '워커가 2명인데' && ng "있는데 없다고 함" "$out" || ok "그때는 요구하지 않는다"
+cleanup
+
+FAN_ONE="$BIG"'
+## 병렬 배치
+| 파도 | 워커 | 항목 | 파일 집합(실측) | 공유 자원 |
+|---|---|---|---|---|
+| W1 | A | P0-1 · P0-2 | `a/**` | 없음 |
+
+## C — 자원 회수
+- [ ] C1 파도 끝마다 worker-release
+'
+setup; printf '%s' "$FAN_ONE" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go")
+printf '%s' "$out" | grep -q '워커가 1명인데\|워커가 [0-9]*명인데' && ng "⭐ 워커 하나인데 협의를 요구한다(소음)" "$out" || ok "⭐ 워커가 하나면 묻지 않는다"
+cleanup
+
+setup; printf '%s' "$SOLO" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go")
+printf '%s' "$out" | grep -q '명인데' && ng "단독인데 협의를 요구한다" "$out" || ok "단독이면 묻지 않는다"
+cleanup
+
+# ⭐ 사보타주 — 워커 수를 세는 자리를 지우면 위 검사가 붉어져야 한다
+setup; printf '%s' "$FAN_FULL" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+sed 's@if \[ "\$workers" -ge 2 \]; then@if false; then@' "$HOOK" > "$T/sab-qp.sh"
+out=$(python3 -c "import json,sys;print(json.dumps({'prompt':'/go'}))" | CLAUDE_PROJECT_DIR="$T" bash "$T/sab-qp.sh" 2>/dev/null)
+printf '%s' "$out" | grep -q '명인데' && ng "사보타주했는데 여전히 지적한다" "$out" || ok "⭐ 세는 자리를 지우면 협의 요구가 사라진다(탐지기가 살아 있다)"
+cleanup
+
 echo "=== 대조군: 작은 계획(체크박스 2개)은 병렬 배치 절을 요구하지 않는다(오탐 0)"
 setup; printf '%s' "$DRAFT" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
 out=$(run "/go")

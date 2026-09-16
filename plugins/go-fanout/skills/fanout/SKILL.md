@@ -132,7 +132,7 @@ done | sort | uniq -d        # ⭐ 출력이 있으면 겹쳤다
 ```
 
 - **겹쳤으면 머지하지 마라.** 겹친 파일을 어느 워커의 것으로 할지 정하고, 다른 쪽 변경을
-  그 워커에게 `orca orchestration send --to dispatch:<id>` 로 넘겨 흡수시킨다.
+  그 워커에게 `bash "$GF/scripts/coordinator-send.sh" --to dispatch:<id> --body "…"` 로 넘겨 흡수시킨다.
 - ⚠ `uniq -d` 가 **빈 출력**이면 성공이 아니라 **아무것도 안 셌을 수도** 있다.
   같은 명령의 `uniq -c | wc -l`(전체 파일 수)을 함께 출력해 탐지기 생존을 증명해라.
 
@@ -340,14 +340,22 @@ Orca 가 이 앞에 자기 lifecycle 프리앰블(`worker_done` 규약 등)을 �
 6. 종료 보고 7절을 `.claude/go-report.md` 에 쓴다(`go-review:go` §7 형식).
 
 ### 하지 마라
-- ⛔ **사용자에게 묻지 마라.** 너는 사용자와 연결돼 있지 않다. 막히면
+- ⛔ **사용자에게 묻지 마라.** 너는 사용자와 연결돼 있지 않다. **막혀서 답이 있어야 진행되면**
   `orca orchestration ask --question "<질문>" --options "a,b" --timeout-ms 600000 --json` 로
   **코디네이터에게** 물어라. 답이 올 때까지 그 질문에 의존하지 않는 항목을 먼저 해라.
-- ⛔⛔ **그리고 진행하면서 `orca orchestration check --json` 을 주기적으로 불러라**
+- ⭐⭐ **막히지는 않았는데 코디네이터가 알아야 하는 것**은 `ask` 가 아니라 이것이다:
+  `orca orchestration send --type escalation --subject "<한 줄>" --body "<무엇을 발견했나>" --json`
+  예: 네 집합 밖에서 결함을 봤다 · 완료 조건이 현실과 다르다 · 다른 워커와 부딪칠 것 같다 ·
+  전제가 틀렸다. 종전에는 채널이 `ask` 뿐이라 이런 것을 **말할 자리가 없었고**, 워커는 혼자
+  판단하거나 종료 보고에만 적었다(그러면 파도가 끝난 뒤에 읽힌다).
+  ⚠ `ask` 는 너를 멈춰 세우고 `escalation` 은 멈추지 않는다. 진행하면서 알려라.
+- ⛔⛔ **그리고 진행하면서 `orca orchestration check --ack --json` 을 불러라**
   (블로킹 아님 · 온 것만 가져온다). 코디네이터의 답은 **네가 부를 때만 도착한다.**
+  부르는 시점은 둘이다: **한 항목을 끝낼 때마다**, 그리고 **터미널에 「코디네이터 메시지가
+  왔다」가 찍히면 즉시**(코디네이터의 래퍼가 그렇게 깨운다).
   ⚠ 실측(2026-09-15): 워커가 보안 변경을 두 번 물었고 코디네이터가 두 번 답했는데, 그 워커의
   완료 보고는 「**답을 받지 못해** 결정은 넘겼습니다」였다. 막히지 않으면 안 부르는 것이 설계라
-  **한 항목을 끝낼 때마다** 부르는 것을 규약으로 삼아라.
+  그 규약이 없으면 답이 도착하지 않는다.
 - ⛔ **네 파일 집합 밖을 고치지 마라.** 아래 목록이 전부다. 밖에서 문제를 발견하면
   고치지 말고 종료 보고 ⑦에 적어라(다른 워커가 그 파일을 동시에 고치고 있다).
 - ⛔ `git add -A` · `git stash`(태그 없이) · `git reset --hard` 금지.
@@ -443,41 +451,60 @@ gh pr view <이미 끝난 워커 PR> --json files --jq '.files[].path' | grep '<
 
 ```bash
 orca orchestration check --wait --types worker_done,escalation,question \
-  --timeout-ms 900000 --json
+  --timeout-ms 900000 --ack --json
 ```
 
 - **타임아웃은 실패가 아니다.** 코딩 작업은 15~60분이 예사다. `{count:0}` 이면 다시 기다려라.
   워커를 죽이지 마라.
+- ⭐ `--ack` 는 **메시지를 전부 처리한 뒤에** 붙인다(아래 주의 참조). 안 붙이면 읽음 표시가
+  남지 않아 같은 메시지를 다음 턴에 또 만나고, Stop 훅이 그것으로 턴을 막는다.
 
-### ⛔⛔ `check --wait` 는 블로킹이다 — 그 사이 다른 일을 하려면 **`inbox` 를 폴링해라** (2026-09-15)
+### ⛔⛔ 2026-09-16 개정 — **`check` 가 기본이다. `worker-list` 폴링으로 대신하지 마라**
 
-위 명령은 질문이 오면 즉시 깨어나지만 **최대 15분을 잡아먹는다.** 코디네이터가 그 사이 자기
-단계(문서·합본 준비)를 진행하려면 못 쓴다. 그날 나는 비블로킹 `worker-list` 폴링으로 바꿨는데,
-그것은 **상태만 보여주고 질문은 안 보여준다.** 결과: 워커 하나가 「코디네이터가 아직
-답하지 않았습니다」를 화면에 적은 채 멈춰 있었다.
+종전 문안은 「블로킹이 싫으면 `worker-list` 로 폴링하라」였다. 그 한 줄이 이 체인에서 가장
+비쌌다. 실측(인박스 695건):
 
-⇒ **비블로킹으로 진행할 때는 반드시 이것을 함께 봐라**:
+| 무엇 | 수 |
+|---|---|
+| worker_done 미읽음 | 40건 중 13 |
+| escalation 미읽음 | 15건 중 8(한 run 은 7/7) |
+| worker_done 미소비 | 34 · run 7 중 6 에서 소비 0 |
+
+`worker-list` 는 **상태만 보여주고 메시지를 안 보여준다.** 워커는 말했고 코디네이터는 듣지
+않았다. 그리고 `inbox` 도 해법이 아니다 — 그것은 **읽음 표시를 바꾸지 않는다**(실측). 인박스를
+소비하는 명령은 `check` 하나다.
 
 ```bash
-orca orchestration inbox --json      # ⚠ `message-list` 라는 명령은 **없다**
+# 기다려도 될 때(기본) — 메시지가 오면 즉시 깨어난다
+orca orchestration check --wait --types worker_done,escalation,question \
+  --timeout-ms 900000 --ack --json
+
+# 그 사이 자기 단계를 진행해야 할 때 — 같은 명령을 **wait 없이** 주기적으로
+orca orchestration check --ack --json
 ```
 
+- **비블로킹이 필요해도 `check` 를 써라.** `--wait` 만 빼면 된다. 바꿀 것은 명령이 아니라 대기다.
+- `worker-list` 는 **상태 보조**다(누가 도는가·핸들은 무엇인가). 메시지 확인 수단이 아니다.
+- `inbox` 는 **읽지 않고 들여다보는** 자리다. 세어 보는 데는 쓰되, 그것으로 「확인했다」고 하지 마라.
+- Stop 훅 `coordinator-inbox-gate.sh` 가 안 읽은 완료 보고·에스컬레이션·미답 질문으로 턴 종료를
+  막는다. 그 문구가 가리키는 해법도 `check --ack` 다.
+
 ⚠⚠ **없는 명령을 부르면 CLI 가 usage 를 내는데, 그 출력을 JSON 으로 파싱하면 「0건」이 된다.**
-그날 나는 그것을 보고 「질문이 안 온다」로 **오진**했고 문서에 도구 결함으로 적기까지 했다.
-`orca orchestration --help` 로 명령이 실존하는지 먼저 확인해라 —
+2026-09-15 에 `message-list`(없는 명령)를 불러 「질문이 안 온다」로 **오진**했고 문서에 도구
+결함으로 적기까지 했다. `orca orchestration --help` 로 명령이 실존하는지 먼저 확인해라 —
 **「탐지기를 먼저 의심하라」의 교과서적 사례다.**
 
 ### ⭐⭐ 그리고 그것을 **훅으로 잠가라** — 규율로는 안 된다
 
 절차는 이미 있었고(위 대기 루프) 내가 안 따랐다. 그래서 **Stop 훅**으로 만들었다:
-`worker-question-gate.sh` — 답 없는 `question` 이 하나라도 있으면 **턴 종료를 거부**한다.
+`coordinator-inbox-gate.sh` — 안 읽은 `worker_done`·`escalation` 이나 답 없는 `question` 이 하나라도 있으면 **턴 종료를 거부**한다(이 세션이 관여한 run 만 · 2026-09-16 에 `worker-question-gate.sh` 에서 개명하며 축이 셋이 됐다).
 
-**훅 본체는 이 플러그인에 있고 설치가 곧 등록이다** — `hooks/worker-question-gate.sh`
-(대조군 `hooks/worker-question-gate.test.sh` · **20검사**). `hooks/hooks.json` 이 Stop 에
+**훅 본체는 이 플러그인에 있고 설치가 곧 등록이다** — `hooks/coordinator-inbox-gate.sh`
+(대조군 `hooks/coordinator-inbox-gate.test.sh` · **50검사**). `hooks/hooks.json` 이 Stop 에
 붙이므로 프로젝트마다 손으로 넣을 것이 없다.
 
 ```bash
-bash "$GF/hooks/worker-question-gate.test.sh"   # 20검사 초록 확인
+bash "$GF/hooks/coordinator-inbox-gate.test.sh" # 50검사 초록 확인
 ```
 
 ⛔⛔ **프로젝트로 복사하지 마라.** 2026-09-16 포장 전에는 이 절이 「복사해 설치한다」였고,
@@ -506,22 +533,42 @@ bash "$GF/hooks/worker-question-gate.test.sh"   # 20검사 초록 확인
 `orca orchestration send --to dispatch:<id>` 는 **inbox 메일**이다. 워커가 다음 번
 `orchestration check` 를 부를 때 도착하고, 워커는 자기 일이 막히지 않으면 그것을 부르지 않는다.
 
+⛔⛔ 실측(2026-09-16): 코디네이터가 워커에게 보낸 단독 `send` **55건 중 54건이 미읽음**이었다.
+98%가 도착하지 않은 것이다. 같은 기간 `reply` 는 600초 안에 보낸 57건이 전부 읽혔다.
+차이는 그때 워커가 무엇을 하고 있었나다 — `reply` 는 `ask` 로 막혀 기다리는 워커에게 가므로
+반환값으로 즉시 닿는다.
+
 ⛔ 실측(2026-09-06): 「`docs/리뷰-이력/` 을 커밋하지 마라」를 넷에게 보냈는데 **둘은 이미
 커밋한 뒤에 받았다.** 그래서 머지 때 그 세 파일이 충돌했다(다행히 append-only 라 이어 붙여
 해결했지만, 코드였으면 훨씬 비쌌다).
 
-⇒ **작업 규약은 Task spec(프리앰블)에 처음부터 넣어라.** 도중에 보내는 메시지로는
-「이미 그 일을 한 워커」를 되돌리지 못한다. 도중 메시지가 값을 하는 것은 두 경우뿐이다:
-① 워커가 `ask` 로 물어서 **기다리고 있을 때**의 답 ② 아직 그 단계에 닿지 않은 워커에게
-주는 정보.
+⇒ 둘을 함께 한다. **작업 규약은 Task spec(프리앰블)에 처음부터 넣고**, 도중 메시지는
+**래퍼로 보낸다**(inbox 에 남기고 터미널로 깨운다 · 사용자 결정 2026-09-16):
+
+```bash
+bash "$GF/scripts/coordinator-send.sh" --to dispatch:<id> --subject "…" --body "…"
+#   ① orchestration send   — 기록·스레드·읽음 추적이 여기 남는다
+#   ② worker-show          — 그 워커의 터미널 핸들
+#   ③ terminal send --enter — 「인박스를 봐라」 한 마디(본문은 넣지 않는다)
+# --no-nudge 로 ③ 생략 · --wait-read <초> 로 읽혔는지 확인 · --nudge-only 로 ① 생략
+```
+
+⚠ 터미널에 **본문을 타이핑하지 마라.** 터미널에 넣은 글자는 기록도 스레드도 읽음 추적도
+남기지 않는다. 터미널이 하는 일은 깨우기 한 가지다.
+⚠ 도중 메시지로는 「이미 그 일을 한 워커」를 되돌리지 못한다. 값을 하는 것은 두 경우다:
+① 워커가 `ask` 로 물어서 **기다리고 있을 때**의 답 ② 아직 그 단계에 닿지 않은 워커에게 주는 정보.
 
 ### `question` 이 오면
 
-**계획 안에 답이 있으면** 그것으로 답한다:
+**계획 안에 답이 있으면** 그것으로 답한다. ⭐ 보내는 자리는 **래퍼 하나**다:
 
 ```bash
-orca orchestration reply --id <msg_id> --body "<답>" --json
+bash "$GF/scripts/coordinator-send.sh" --reply <msg_id> --body "<답>"
 ```
+
+래퍼가 inbox 로 답하고, 원 질문이 오래됐으면(기본 600초) **터미널로 깨우기까지** 한다.
+실측: 600초 안에 보낸 `reply` 는 57건 전부 읽혔고, 600초를 넘긴 4건 중 1건은 미읽음이었다.
+워커가 그 사이 `ask` 에서 빠져나와 있으면 답은 inbox 에만 쌓인다.
 
 **계획 밖이면** — 사용자에게 묻지 말고 **보수적 기본**(범위를 넓히지 않는 쪽)으로 답한 뒤,
 그 사실과 판단 근거를 종료 보고 ⑦에 **반드시** 적어라. 사용자의 검증층은 그 보고다.
@@ -741,6 +788,22 @@ bash "$GF/scripts/cleanup.sh" --run <run_id>           # 후보 표만(기본 dr
 bash "$GF/scripts/cleanup.sh" --run <run_id> --apply   # 회수 → release → 삭제
 ```
 
+### ⭐⭐ 남는 것은 세 부류이고 **치우는 주체가 다르다** (2026-09-16 실측)
+
+워커 워크트리만 보면 「깨끗하다」가 나온다. 실제로 그날 fan-out 워커 워크트리는 0개였고,
+그런데도 855MB 와 장부 32건이 남아 있었다. 세는 자리가 따로 없으면 아무도 안 본다.
+
+| 부류 | 무엇 | 누가 치우나 | 어떻게 |
+|---|---|---|---|
+| 워커 워크트리 | Orca 가 만든 것 · `worker-list` 가 안다 | 스크립트 | `cleanup.sh --run <id> --apply` |
+| 대조군 고아 | go-tester 가 「보호를 깨면 붉어지나」를 볼 때 만든 격리 워크트리. 자식이 죽으면 남는다 | 스크립트 | `cleanup.sh --cg-orphans --apply`(미커밋 0 · 6시간 이상만) |
+| Orca 장부 retained | 터미널이 이미 없는데 레코드만 남은 것 · 사람이 이어받은 터미널 | **사람** | 코디네이터는 `terminal close` 를 쓰지 않는다(Orca 정본) |
+
+`wave-close.sh` 의 ⑥ 축이 이 셋을 한 번에 세어 종료 보고 ⑥용 표로 낸다. **막지는 않는다** —
+이 파도가 만든 것이 아니기 때문이다.
+⛔ 대조군 고아에 **미커밋이 있으면 지우지 않는다.** 실측으로 그런 것이 하나 있었고(미커밋 24건)
+사람이 디버깅하다 둔 것이었다. 지우는 것은 되돌릴 수 없다.
+
 ⭐ **「기억」은 새로 만들지 않았다.** `orca orchestration worker-list --run <id> --json` 이
 `runId → worktreeId(전체 경로)` 를 이미 들고 있고 그것이 정본이다. `parentWorktreeId` 는
 실측상 전부 비어 있어 계보로는 못 찾는다 — worker-list 가 유일한 근거다.
@@ -825,6 +888,12 @@ Connection lost` 로 끝났고, 그때 **커밋되지 않은 파일 열여섯 �
 
 ### 죽은 워커를 되살리는 법 — 순서가 있다
 
+⭐ 1단계에 닿기 전에 대개 **Stop 훅이 먼저 말한다.** `coordinator-inbox-gate.sh` 가 30분 넘게
+heartbeat 이 없는 워커를 매 턴 알린다(차단 아님 · `CLAUDE_WORKER_HB_GAP_MIN`). 실측 분포는
+표본 395건에 중앙 3.7분·p95 26분이라 30분은 넉넉한 선이다.
+⚠ 그 알림은 「죽었다」가 아니다 — `ask` 나 `check --wait` 로 막힌 워커는 heartbeat 을 건너뛴다
+(Orca 계약). 그래서 알림이 뜨면 아래 1단계로 **확인**하는 것이지 바로 되살리는 것이 아니다.
+
 1. **상태는 `worker-list` 가 아니라 터미널로 확인해라.** 실측으로 목록은 여섯 다
    `ready/working` 이라 했는데 터미널은 둘이 `done` 이었다.
    ```bash
@@ -835,8 +904,10 @@ Connection lost` 로 끝났고, 그때 **커밋되지 않은 파일 열여섯 �
    ⚠ 붉은 채로 커밋하는 것이 잃는 것보다 낫다. 거짓 초록으로 적지만 마라.
 3. **같은 터미널을 깨워 본다.** 그 문맥이 살아 있으면 가장 싸다.
    ```bash
-   orca terminal send --terminal <handle> --text "이어서 진행해라."
+   bash "$GF/scripts/coordinator-send.sh" --to terminal:<handle> --nudge-only
    ```
+   ⭐ 터미널에 글자를 넣는 자리는 **래퍼 하나**다(2026-09-16). 코디네이터가 여러 자리에서
+   각자 `terminal send` 를 부르면 문구도 절차도 갈라지고, 무엇을 보냈는지 아무 데도 안 남는다.
 4. **안 살아나면 새 워커를 같은 워크트리에 띄운다.**
    ```bash
    orca orchestration worker-start --run <run_id> --spec "$(cat <새 지시서>)" \

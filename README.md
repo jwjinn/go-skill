@@ -95,7 +95,7 @@ flowchart TD
 | 턴 종료 | `plan-file-gate.sh` | 계획 파일에 미완료 체크박스가 남았으면 거부한다 | **예** |
 | 턴 종료 | `todo-completion-gate.sh` | 마지막 `TodoWrite` 에 미완료가 남았으면 거부한다 | **예** |
 | 턴 종료 | `review-gate.sh` | 확정 결함이 미해결이면 거부한다 | **예** |
-| 턴 종료 | `worker-question-gate.sh` | 워커가 답을 기다리는데 턴을 끝내면 거부한다(go-fanout) | **예** |
+| 턴 종료 | `coordinator-inbox-gate.sh` | 안 읽은 완료 보고·에스컬레이션·미답 질문이 남으면 거부한다(go-fanout) | **예** |
 | 턴 종료 | `wave-close-gate.sh` | 파도가 끝났는데 자원을 안 치웠으면 거부한다(go-fanout) | **예** |
 
 차단 축이 둘인 이유는 실측이다. `TodoWrite` 도구가 **하네스 빌드에 아예 없는 세션**이

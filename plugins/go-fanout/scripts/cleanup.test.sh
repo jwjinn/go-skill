@@ -159,5 +159,52 @@ OUT6="$(bash "$SUT" --apply 2>&1)"; RC6=$?
 check "t22 두 번째 --apply 는 이미 정리된 것을 gone 으로 보고 exit 0" "[ $RC6 -eq 0 ] && row \"\$OUT6\" merged-clean | grep -q gone" "$OUT6"
 
 echo
+echo "== ⭐⭐ 대조군 고아(--cg-orphans) — 대조군 스크립트가 남긴 워크트리 (2026-09-16) =="
+# Orca 가 만든 것이 아니라 worker-list 에 없고, 그래서 본 경로가 영영 안 본다.
+# 실측: 4개 855MB 가 며칠째 남아 있었고 세어 보고서야 알았다.
+CG="$(mktemp -d)"; mkdir -p "$CG/cg"
+mk_wt(){ # mk_wt <이름> <시간 전> <미커밋 수>
+  d="$CG/cg/wt-$1"; mkdir -p "$d"
+  ( cd "$d" && git init -q . && git config user.email t@t && git config user.name t \
+    && echo base > base.txt && git add base.txt && git commit -qm base ) >/dev/null 2>&1
+  i=0; while [ "$i" -lt "$3" ]; do echo x > "$d/dirty$i.txt"; i=$((i+1)); done
+  python3 -c 'import os,sys,time;t=time.time()-int(sys.argv[2])*3600;os.utime(sys.argv[1],(t,t))' "$d" "$2"
+}
+cg_run(){ CLAUDE_CG_ROOTS="$CG/cg" bash "$SUT" --cg-orphans "$@" 2>&1; }
+
+mk_wt old 22 0
+out=$(cg_run)
+printf '%s' "$out" | grep -q '후보.*wt-old' && ok "6시간 이상 · 미커밋 0 → 후보" || bad "고아 미검출" "$out"
+printf '%s' "$out" | grep -q '후보 1개' && ok "개수를 센다" || bad "개수가 틀리다" "$out"
+
+mk_wt fresh 1 0
+out=$(cg_run)
+printf '%s' "$out" | grep -q '건너뜀.*wt-fresh' && ok "⭐ 6시간 미만은 건너뛴다(아직 쓰는 중일 수 있다)" || bad "신선한 것을 후보로 올렸다" "$out"
+
+mk_wt dirty 30 3
+out=$(cg_run)
+printf '%s' "$out" | grep -q '⛔ 건너뜀.*wt-dirty.*미커밋 3건' && ok "⛔ 미커밋이 있으면 후보에서 빼고 사유를 말한다" || bad "미커밋을 지우려 한다" "$out"
+printf '%s' "$out" | grep -q '제외 1개' && ok "제외 개수를 따로 센다" || bad "제외 개수가 틀리다" "$out"
+
+echo "== ⭐ --apply 는 미커밋 0 인 것만 지운다 =="
+out=$(cg_run --apply)
+[ -d "$CG/cg/wt-old" ] && bad "미커밋 0 인데 안 지웠다" "$out" || ok "미커밋 0 은 지웠다"
+[ -d "$CG/cg/wt-dirty" ] && ok "⛔ 미커밋이 있는 것은 그대로 있다" || bad "미커밋이 있는데 지웠다" "$out"
+[ -d "$CG/cg/wt-fresh" ] && ok "신선한 것도 그대로 있다" || bad "신선한 것을 지웠다" "$out"
+
+echo "== ⭐ 같은 디렉토리를 두 번 세지 않는다(심링크) =="
+# macOS 에서 /tmp 는 /private/tmp 의 심링크다. 실경로로 정규화하지 않으면 후보가 2배가 된다.
+ln -s "$CG/cg" "$CG/cg-link" 2>/dev/null
+mk_wt dup 40 0
+out=$(CLAUDE_CG_ROOTS="$CG/cg $CG/cg-link" bash "$SUT" --cg-orphans 2>&1)
+n=$(printf '%s' "$out" | grep -c '후보 .*wt-dup')
+[ "$n" = 1 ] && ok "같은 워크트리를 한 번만 센다" || bad "중복으로 셌다($n회)" "$out"
+
+echo "== ⭐ 사보타주 — 미커밋 검사를 지우면 dirty 도 후보가 된다 =="
+sed 's@if \[ "\$dirty" -gt 0 \]; then@if false; then@' "$SUT" > "$CG/sab.sh"
+out=$(CLAUDE_CG_ROOTS="$CG/cg" bash "$CG/sab.sh" --cg-orphans 2>&1)
+printf '%s' "$out" | grep -q '후보.*wt-dirty' && ok "사보타주하면 미커밋이 후보로 올라온다(탐지기가 살아 있다)" || bad "사보타주해도 그대로다" "$out"
+rm -rf "$CG"
+
 echo "통과 $PASS · 실패 $FAIL"
 [ "$FAIL" -eq 0 ]

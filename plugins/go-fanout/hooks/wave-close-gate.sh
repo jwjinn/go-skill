@@ -133,14 +133,9 @@ print("\n".join(out))
 
 [ -n "$OPEN" ] || { : > "$STAMP"; exit 0; }
 # ⭐ 세션 스코프 — 이 세션의 도구 호출·도구 결과에 run_id 가 없으면 그 run 은 이 세션의 일이 아니다.
-if [ -n "$TR" ] && [ -f "$TR" ] && command -v jq >/dev/null 2>&1; then
-  # ⚠ **모델이 쓴 산문은 보지 않는다** — 도구 호출의 입력과 도구 결과만 본다.
-  #   이 게이트에 한 번 막힌 세션은 그 run_id 를 답변에 인용하게 되고, 산문까지 세면 그 인용이
-  #   다음 턴의 「관여」 근거가 된다(자기 출력을 자기 근거로 삼는 부류 · 대조군 t18-b).
-  SEEN="$(jq -rR 'fromjson?
-      | if .type=="assistant" then (.message.content[]? | select(.type=="tool_use") | .input | tostring)
-        elif (.type=="user" and has("toolUseResult")) then (.toolUseResult | tostring)
-        else empty end' "$TR" 2>/dev/null || true)"
+#   판별은 `_runs.sh` 하나가 한다(코디네이터 인박스 게이트와 같은 함수 · 2026-09-16 P0).
+. "$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/_runs.sh" 2>/dev/null || true
+if [ -n "$TR" ] && command -v session_seen >/dev/null 2>&1 && SEEN="$(session_seen "$TR")"; then
   MINE=''
   while IFS=$'\t' read -r run held total ids; do
     [ -n "$run" ] || continue

@@ -23,16 +23,76 @@ ARCHIVE_ROOT="${FANOUT_ARCHIVE_DIR:-$HOME/orca/fanout-archive}"
 
 RUN_FILTER=""
 APPLY=0
+CG_ONLY=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --run)         RUN_FILTER="${2:-}"; shift 2 ;;
     --apply)       APPLY=1; shift ;;
     --archive-dir) ARCHIVE_ROOT="${2:-}"; shift 2 ;;
+    --cg-orphans)  CG_ONLY=1; shift ;;
     -h|--help)     sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "알 수 없는 인자: $1" >&2; exit 2 ;;
   esac
 done
+
+# ── --cg-orphans — 대조군 스크립트가 남긴 워크트리만 본다 (2026-09-16) ────────
+# go-tester 가 「보호를 깨면 정말 붉어지는가」를 볼 때 격리 워크트리를 만든다. 그 자식이
+# 중간에 죽으면 남는다. Orca 가 만든 것이 아니라 `worker-list` 에 없고, 그래서 이 스크립트의
+# 본 경로가 영영 안 본다 — 실측(2026-09-16) 4개 855MB 가 며칠째 있었다.
+#
+# ⛔ **미커밋이 있으면 지우지 않는다.** 대조군 워크트리라도 사람이 디버깅하다 둔 것일 수 있고,
+#   실제로 그런 것이 하나 있었다(미커밋 24개). 지우는 것은 되돌릴 수 없다.
+if [ "$CG_ONLY" = "1" ]; then
+  # ⚠ macOS 에서 `/tmp` 는 `/private/tmp` 의 심링크다. 둘을 다 훑으면 **같은 워크트리를 두 번**
+  #   세고(실측 2026-09-16: 후보 2개가 4개로 보고됐다), `--apply` 는 두 번째에서 실패를 낸다.
+  #   실경로로 정규화해 중복을 지운다 — 「개수를 세라」가 이 체인의 탐지 수단인데 그 수가 틀리면 안 된다.
+  CG_ROOTS="${CLAUDE_CG_ROOTS:-/private/tmp/go-tester/cg /tmp/go-tester/cg}"
+  CG_HOURS="${CLAUDE_CG_ORPHAN_HOURS:-6}"
+  n_cand=0; n_skip=0; n_gone=0
+  cg_seen=''
+  for root in $CG_ROOTS; do
+    [ -d "$root" ] || continue
+    for wt_raw in "$root"/wt-*; do
+      [ -d "$wt_raw" ] || continue
+      wt=$(cd "$wt_raw" 2>/dev/null && pwd -P) || wt="$wt_raw"
+      case " $cg_seen " in *" $wt "*) continue ;; esac
+      cg_seen="$cg_seen $wt"
+      age_h=$(python3 -c 'import os,sys,time;print(int((time.time()-os.path.getmtime(sys.argv[1]))//3600))' "$wt" 2>/dev/null || echo 0)
+      case "$age_h" in ''|*[!0-9]*) age_h=0 ;; esac
+      if [ "$age_h" -lt "$CG_HOURS" ]; then
+        echo "▸ 건너뜀 $wt — ${age_h}시간 전(기준 ${CG_HOURS}시간 · 아직 쓰는 중일 수 있다)"
+        continue
+      fi
+      dirty=$(git -C "$wt" status --porcelain 2>/dev/null | grep -c . || true)
+      case "$dirty" in ''|*[!0-9]*) dirty=0 ;; esac
+      if [ "$dirty" -gt 0 ]; then
+        echo "▸ ⛔ 건너뜀 $wt — 미커밋 ${dirty}건이다. 사람이 보고 정해야 한다"
+        n_skip=$((n_skip+1)); continue
+      fi
+      n_cand=$((n_cand+1))
+      if [ "$APPLY" = "1" ]; then
+        main_wt=$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's@/\.git$@@')
+        if [ -n "$main_wt" ] && [ -d "$main_wt" ] && git -C "$main_wt" worktree remove --force "$wt" >/dev/null 2>&1; then
+          echo "▸ 지웠다 $wt (${age_h}시간 전 · 미커밋 0)"
+        else
+          rm -rf "$wt" && echo "▸ 지웠다 $wt (${age_h}시간 전 · git 등록이 없어 디렉토리만)" \
+            || { echo "▸ ⚠ 실패 $wt"; continue; }
+        fi
+        n_gone=$((n_gone+1))
+      else
+        echo "▸ 후보 $wt — ${age_h}시간 전 · 미커밋 0"
+      fi
+    done
+  done
+  echo
+  if [ "$APPLY" = "1" ]; then
+    echo "대조군 고아 정리: 지움 ${n_gone} · 미커밋이라 건너뜀 ${n_skip}"
+  else
+    echo "대조군 고아 후보 ${n_cand}개 · 미커밋이라 제외 ${n_skip}개 (dry-run — 지우려면 --apply)"
+  fi
+  exit 0
+fi
 
 # 미커밋이어도 「코드 변경」으로 보지 않는 경로들 — 게이트·리뷰 체인이 워크트리에
 # 남기는 산출물이다. 삭제를 막지는 않되 **아카이브 대상**이 된다.

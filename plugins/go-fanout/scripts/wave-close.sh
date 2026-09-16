@@ -246,6 +246,83 @@ if [ "$UNMEASURED" -gt 0 ]; then
   exit 2
 fi
 
+# ── ⑥ 이 파도 밖의 잔재 — 대조군 고아와 Orca 장부 (2026-09-16) ────────────────
+# ⚠ 이 축은 **막지 않는다.** 이 파도가 만든 것이 아니기 때문이다. 그래도 여기서 세는 이유는,
+#   재는 자리가 따로 없으면 아무도 안 재기 때문이다(실측 2026-09-16: 대조군 고아 4개 855MB 와
+#   장부 32건이 며칠째 남아 있었고, 세어 보고서야 알았다).
+step "⑥ 파도 밖 잔재(알림 — 이 파도를 막지 않는다)"
+
+# (a) 대조군 스크립트가 남긴 워크트리. go-tester 가 「보호를 깨서 붉어지는지」 볼 때 만든다.
+#     ⛔ 미커밋이 있으면 후보에서 뺀다 — 그 안에 사람이 봐야 할 것이 들어 있을 수 있다.
+# ⚠ macOS 에서 `/tmp` 는 `/private/tmp` 의 심링크다. 둘을 다 훑으면 **같은 워크트리를 두 번**
+#   세고(실측 2026-09-16: 후보 2개가 4개로 보고됐다), `--apply` 는 두 번째에서 실패를 낸다.
+#   실경로로 정규화해 중복을 지운다 — 「개수를 세라」가 이 체인의 탐지 수단인데 그 수가 틀리면 안 된다.
+CG_ROOTS="${CLAUDE_CG_ROOTS:-/private/tmp/go-tester/cg /tmp/go-tester/cg}"
+CG_HOURS="${CLAUDE_CG_ORPHAN_HOURS:-6}"
+cg_cands=''; cg_skip=''
+cg_seen=''
+for root in $CG_ROOTS; do
+  [ -d "$root" ] || continue
+  for wt_raw in "$root"/wt-*; do
+    [ -d "$wt_raw" ] || continue
+    wt=$(cd "$wt_raw" 2>/dev/null && pwd -P) || wt="$wt_raw"
+    case " $cg_seen " in *" $wt "*) continue ;; esac
+    cg_seen="$cg_seen $wt"
+    age_h=$(python3 -c 'import os,sys,time;print(int((time.time()-os.path.getmtime(sys.argv[1]))//3600))' "$wt" 2>/dev/null || echo 0)
+    case "$age_h" in ''|*[!0-9]*) age_h=0 ;; esac
+    [ "$age_h" -ge "$CG_HOURS" ] || continue
+    dirty=$(git -C "$wt" status --porcelain 2>/dev/null | grep -c . || true)
+    case "$dirty" in ''|*[!0-9]*) dirty=0 ;; esac
+    if [ "$dirty" -gt 0 ]; then
+      cg_skip="${cg_skip}    · $wt — 미커밋 ${dirty}건이라 후보에서 뺀다(사람이 본다)\n"
+    else
+      cg_cands="${cg_cands}    · $wt — ${age_h}시간 전 · 미커밋 0\n"
+    fi
+  done
+done
+if [ -n "$cg_cands" ]; then
+  printf '  ⚠ 대조군 고아 워크트리(미커밋 0 · %s시간 이상):\n' "$CG_HOURS"
+  printf "$cg_cands"
+  printf '    → 지우려면: bash %s/cleanup.sh --cg-orphans --apply\n' "$SELF"
+fi
+[ -n "$cg_skip" ] && { echo "  ⛔ 미커밋이 있어 건드리지 않는 것:"; printf "$cg_skip"; }
+[ -n "$cg_cands$cg_skip" ] || fine "대조군 고아 없음"
+
+# (b) Orca 장부와 실제 터미널의 차이. 코디네이터는 retained 터미널을 닫을 수 없다(Orca 정본:
+#     「Never substitute terminal close」). 그러니 여기서 하는 일은 **가르고 사람에게 넘기는 것**이다.
+TL="$("$ORCA_BIN" terminal list --json 2>/dev/null)" || TL=''
+if [ -n "$TL" ]; then
+  printf '%s' "$WL" | GATE_TL="$TL" python3 -c '
+import json, os, sys
+try:
+    ws = (json.load(sys.stdin).get("result") or {}).get("workers") or []
+    ts = (json.loads(os.environ.get("GATE_TL") or "{}").get("result") or {}).get("terminals") or []
+except Exception:
+    raise SystemExit(0)
+live = {t.get("handle") for t in ts if t.get("handle")}
+alive, ghost = [], []
+for w in ws:
+    if str(w.get("terminalState") or "").lower() != "retained":
+        continue
+    h = w.get("agentTerminalHandle")
+    (alive if h in live else ghost).append((w.get("dispatchId"), h))
+if ghost:
+    print("  ⚠ 장부만 남은 레코드 %d건 — 터미널이 실제로 없다(자원은 이미 풀렸다):" % len(ghost))
+    for d, h in ghost[:8]:
+        print("    · %s (%s)" % (d, h))
+    if len(ghost) > 8:
+        print("    · … 외 %d건" % (len(ghost) - 8))
+if alive:
+    print("  ⛔ 살아 있는 터미널 %d개 — **사람이 닫아야 한다**(코디네이터는 terminal close 를 쓰지 않는다):" % len(alive))
+    for d, h in alive[:8]:
+        print("    · %s (%s)" % (d, h))
+if not ghost and not alive:
+    print("  ✅ retained 레코드 없음")
+' 2>/dev/null
+else
+  unmeasured "terminal list 를 못 받아 장부와 실제를 대조하지 못했다"
+fi
+
 echo
 if [ "$APPLY" = "1" ]; then
   echo "전부 통과 — 회수로 넘긴다."

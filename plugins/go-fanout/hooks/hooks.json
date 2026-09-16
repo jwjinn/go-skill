@@ -1,14 +1,14 @@
 {
-  "description": "go-fanout 게이트 — 파도의 두 끝을 막는다: 워커의 미답 질문(worker-question-gate) · 마감하지 않은 자원(wave-close-gate)",
+  "description": "go-fanout 게이트 — 파도의 두 끝을 막는다: 코디네이터가 안 읽은 인박스(coordinator-inbox-gate) · 마감하지 않은 자원(wave-close-gate)",
   "hooks": {
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worker-question-gate.sh\"",
-            "timeout": 15,
-            "statusMessage": "워커 질문 확인(답 없는 question 이 남았나)"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/coordinator-inbox-gate.sh\"",
+            "timeout": 20,
+            "statusMessage": "인박스 확인(안 읽은 완료 보고·에스컬레이션·질문이 남았나)"
           },
           {
             "type": "command",
