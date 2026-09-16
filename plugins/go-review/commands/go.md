@@ -177,6 +177,54 @@ rm -f "$CLAUDE_PROJECT_DIR/.claude/tester/opt-in.json"
 띄우지 않는다. 즉 질문을 빠뜨리면 「안 쓰는 쪽」으로 닫힌다 — 그것이 이 설계의 기본값이다.
 
 
+### 0-e. ⭐⭐ 구현 위임(go-coder)도 **따로** 묻는다 (2026-09-16)
+
+⚠ 테스트 위임(§0-d)과 **한 번에 묻지 마라.** 구현을 넘기는 것은 테스트를 넘기는 것보다 큰
+결정이고, 한 번의 「쓴다」로 둘이 켜지면 사람이 무엇에 답했는지 모르게 된다. 옵트인 파일도
+`.claude/coder/opt-in.json` 으로 따로다.
+
+⛔⛔ **이 절을 건너뛰면 go-coder 는 영구히 rc 70 이다.** 그 파일을 쓰는 자리가 여기 하나뿐이고,
+`_config.py` 는 기본값 `ask` 에서 옵트인 기록이 없으면 `not_opted_in` 으로 닫는다 — 사용자가
+「쓴다」고 답해도 켤 방법이 없어진다(2026-09-16 리뷰가 그 상태를 잡았다).
+
+```bash
+TC=$(bash "${CLAUDE_PLUGIN_ROOT}/hooks/_plugins.sh" go-coder coder/_config.py) || TC=""
+[ -n "$TC" ] || echo "go-coder 미설치 — 이 절을 건너뛴다(격자에서 「로컬 구현」 갈래도 내지 마라)"
+PLAN=<사전 확인이 지목한 계획 경로>
+CLAUDE_PLAN_FILE="$PLAN" python3 "$TC/coder/_config.py" | grep -E '^CODER_(ENABLED|MODE|PROFILE|REASON)='
+grep -c '로컬 구현' "$PLAN"        # 이 계획에서 구현을 넘길 항목 수
+```
+
+- **판정이 `no_profile`·`no_codex`·`profile_missing` 이면 묻지 마라.** 선택지가 「안 쓴다」뿐이다.
+  그 사유를 한 줄로 알리고 넘어간다(⚠ 틀린 사유는 없는 것보다 나쁘다 — 「쓴다고 답하면 된다」고
+  말하지 마라. 그 상태에서는 답해도 안 돈다).
+- 구성이 `on`·`off` 로 **명시**돼 있으면 묻지 않는다.
+- 마지막 명령이 **0 이면** 이 계획에 구현 위임 대상이 없다는 뜻이다. 그 사실을 말하고 묻지 마라.
+
+물을 때 넷을 함께 보여라: ①프로파일 이름과 그것이 가리키는 모델 ②`model_catalog_json` 주입
+여부(없으면 큰 파일 부분 수정이 3회 중 1회만 통과한 실측이 있다) ③이 계획의 「로컬 구현」 항목
+**이름과 개수** ④「그 항목에 닿을 때만 부르고, 그 밖에는 세션이 직접 구현한다」.
+
+**답이 「쓴다」이면** 기록한다. ⚠ `plan_fingerprint` 를 빠뜨리면 `_config.py` 가 거부한다.
+
+```bash
+mkdir -p "$CLAUDE_PROJECT_DIR/.claude/coder"
+FP=$(CLAUDE_PLAN_FILE="$PLAN" python3 "$TC/coder/_config.py" | grep '^CODER_PLAN_FINGERPRINT=' | cut -d= -f2- | tr -d "'")
+cat > "$CLAUDE_PROJECT_DIR/.claude/coder/opt-in.json" <<JSON
+{"answer":"use","plan_file":"$PLAN","plan_fingerprint":"$FP","asked_at":"$(date -Iseconds)"}
+JSON
+```
+
+**답이 「안 쓴다」이면** 목표 계약에 `구현 위임: 미사용(<사유>)` 을 적고
+⛔ **기존 옵트인 파일을 지워라** — 앞 계획의 기록이 남아 있으면 안 쓴다고 답했는데도 켜진다.
+
+```bash
+rm -f "$CLAUDE_PROJECT_DIR/.claude/coder/opt-in.json"
+```
+
+⭐ 옵트인은 **계획 파일의 내용 해시**에 묶인다. 계획이 바뀌면 무효가 되어 다시 물어야 한다 —
+승인받은 계획이 달라졌으면 그 답도 다시 받는 것이 옳다.
+
 ### ⭐⭐ 0-c-2. 병렬 배치가 있으면 — 닫혔는지 보고, fan-out 으로 넘겨라 (2026-09-16)
 
 `## 병렬 배치` 절의 워커 행을 세라.
@@ -275,9 +323,16 @@ rm -f "$CLAUDE_PROJECT_DIR/.claude/tester/opt-in.json"
    테스트 위임과 **다른 도구·다른 옵트인**이다. 구현을 넘기는 것은 테스트를 넘기는 것보다
    큰 결정이라 한 번의 「쓴다」로 둘이 같이 켜지면 사람이 무엇에 답했는지 모르게 된다.
 
+   **먼저 옵트인을 받는다** — tester 와 **따로**다(§0-e). 받지 않으면 `coder.sh` 는
+   `not_opted_in` 으로 rc 70 을 내고 codex 를 부르지도 않는다.
+
    ```bash
    TC=$(bash "${CLAUDE_PLUGIN_ROOT}/hooks/_plugins.sh" go-coder coder/_config.py) || TC=""
-   bash "$TC/coder/coder.sh" \
+   # ⛔⛔ **`CLAUDE_PLAN_FILE` 을 반드시 넘겨라**(2026-09-16 리뷰 must_fix). 안 넘기면
+   #   `_config.py` 가 레거시 `plan-active.md` 로 폴백하고, slug 계획에서는 그 파일이 없어
+   #   **rc 68(계획 파일 훼손 탐지)이 통째로 무장되지 않는다.** 계획 파일은 gitignore 대상이라
+   #   rc 66 도 못 잡으므로 **두 겹이 동시에 빈다.** §0-d 가 tester 에 대해 적은 것과 같은 함정이다.
+   CLAUDE_PLAN_FILE="$PLAN" bash "$TC/coder/coder.sh" \
      --task /tmp/impl.md --targets '<계획 항목이 선언한 대상 파일>' \
      --gate '<그 항목의 게이트 명령>' \
      --cwd "$CLAUDE_PROJECT_DIR" --out /tmp/coder-<단계>.json --label <단계>
@@ -331,8 +386,11 @@ rm -f "$CLAUDE_PROJECT_DIR/.claude/tester/opt-in.json"
 ⭐ **테스트 에이전트를 켰으면 회수에 한 줄을 더한다**(2026-09-15):
 
 ```markdown
-- [ ] C3 `.claude/tester/opt-in.json` 삭제 — 옵트인은 이 계획에만 유효하다
+- [ ] C3 `.claude/tester/opt-in.json`·`.claude/coder/opt-in.json` 삭제 — 옵트인은 이 계획에만 유효하다
 ```
+
+⚠ **둘 다 지워라.** 테스트 위임과 구현 위임은 따로 묻고 따로 기록하므로(§0-d·§0-e) 회수도 둘이다.
+하나만 지우면 다음 계획이 나머지 하나를 **묻지 않고** 켠다.
 
 그 파일을 남기면 다음 계획이 **묻지 않고** 켜진다. 「기본은 안 씀 · 계획마다 묻는다」가
 거짓이 되는 자리가 여기 하나다. fan-out 이 아니어도 이 줄은 필요하다.

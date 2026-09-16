@@ -142,21 +142,32 @@ under_cap() {
 # ⚠⚠ 이 축은 위 경고 축의 조건(계획 활성·코드 변경)과 **독립**이다. 라운드를 돌렸는데
 #   원장에 없는 것은 계획 상태와 무관하므로 그 조기 종료들보다 **앞에** 둔다.
 if [ -d "$root/.claude/review/runs" ]; then
-  _rl="$root/docs/리뷰-이력/rounds.jsonl"
+  # ⚠ **다른 다섯 자리와 같은 식을 써라**(2026-09-16 리뷰 must_fix). 하드코딩하면 원장을 옮긴
+  #   프로젝트에서 제대로 기록된 라운드를 전부 「없다」고 보고하고 **틀린 사유**를 말한다 —
+  #   「정본이 둘」은 이 저장소군의 반복 함정 1위다.
+  #   정본: record-round.sh:30 · measure.sh:7 · verdict.sh:27 · history.sh:14 · eval/eval.sh:116
+  _rl="${CLAUDE_REVIEW_HISTORY_DIR:-$root/docs/리뷰-이력}/rounds.jsonl"
   _missing=""
   _seen=0
+  _noledger=0
   for _d in "$root"/.claude/review/runs/*/; do
     [ -d "$_d" ] || continue
     _seen=$((_seen + 1))
     _rid=$(basename "$_d")
     # 라운드 디렉토리가 **결과를 낸 것**만 센다. 만들다 만 자리는 누락이 아니다.
     [ -f "$_d/merged.json" ] || [ -f "$_d/candidates.json" ] || continue
-    if [ ! -f "$_rl" ] || ! grep -Fq "\"$_rid\"" "$_rl" 2>/dev/null; then
+    if [ ! -f "$_rl" ]; then
+      # ⭐ 원장 파일 자체가 없는 것은 **누락이 아니라 미측정**이다(빈 것과 깨끗한 것은 다르다 —
+      #   P5-2 대조군 ③이 runs/ 에 대해 세운 원칙을 원장 쪽에도 적용한다).
+      _noledger=1
+    elif ! grep -Fq "\"$_rid\"" "$_rl" 2>/dev/null; then
       _missing="$_missing $_rid"
     fi
   done
   # ⭐ `runs/` 가 비어 있으면 **판정하지 않는다.** 「0건 누락」과 「잴 것이 없었다」는 다르다.
-  if [ "$_seen" -gt 0 ] && [ -n "$_missing" ]; then
+  if [ "$_seen" -gt 0 ] && [ "${_noledger:-0}" -eq 1 ]; then
+    LEDGER_MSG="📒 라운드 디렉토리가 $_seen 개 있는데 **원장 파일을 찾지 못했다**($_rl) — 「누락」이 아니라 **어디 있는지 모르는 것**이다. 원장을 옮겼으면 \`CLAUDE_REVIEW_HISTORY_DIR\` 를 세워라(record-round.sh·measure.sh·verdict.sh·history.sh 가 같은 값을 읽는다). ⚠ 차단이 아니라 안내다."
+  elif [ "$_seen" -gt 0 ] && [ -n "$_missing" ]; then
     LEDGER_MSG="📒 라운드 디렉토리는 있는데 **원장에 없다**:$_missing — \`docs/리뷰-이력/rounds.jsonl\` 에 그 라운드가 없다. \`Agent\` 로 리뷰어를 직접 띄우면 _dedup·병합자·verdict·원장 기록이 전부 건너뛰어진다(결함은 잡히고 측정만 사라진다 — 그래서 조용하다). 다음부터는 \`Skill(go-review:review-loop)\` 로 불러라. 이미 돈 라운드는 \`review/record-round.sh\` 로 기록할 수 있다. ⚠ 차단이 아니라 안내다."
   fi
 fi
@@ -187,9 +198,7 @@ if [ -f "$review" ]; then
   #   원 레포의 규칙("0 이 나오면 탐지기부터 의심하라")대로 조용히 넘기지 않고 말한다.
   #   다만 차단하지도 않는다 — 못 쟀다는 것을 알리는 것까지가 이 자리의 몫이다.
   if [ "$boxes" -eq 0 ]; then
-    jq -n --arg p "$review" \
-      '{systemMessage: ("⚠ 리뷰 파일에 체크박스가 0개다(" + $p + ") — 반영 게이트가 이 파일을 판정하지 못한다. `- [ ] [severity] 파일:줄 — 요약` 형식으로 적어라(반영이 끝났으면 파일을 지워라).")}' 2>/dev/null
-    exit 0
+    finish "⚠ 리뷰 파일에 체크박스가 0개다($review) — 반영 게이트가 이 파일을 판정하지 못한다. \`- [ ] [severity] 파일:줄 — 요약\` 형식으로 적어라(반영이 끝났으면 파일을 지워라)."
   fi
 
   # ── ⭐⭐ 반영 주장에 「재는 법」이 있나 (2026-09-16) ─────────────────────────
@@ -263,6 +272,13 @@ ${list}${more}
   · [x] 로 위장하지 마라. **그 줄을 지우고** 사용자에게 왜 기각하는지 말해라.
     침묵으로 넘기면 다음 사람이 그 판단을 다시 할 수 없다."
 
+      # ⭐⭐ **차단할 때도 원장·확인 메시지를 버리지 않는다**(2026-09-16 리뷰 must_fix).
+      #   종전에는 여기서 바로 block 만 내서, `left>0` 인 정상 상태(반영 진행 중)에서는
+      #   🧾「근거 없이 체크했다」 경고가 **한 번도 화면에 나오지 않았다** — 그 경고가 가장
+      #   필요한 구간이 바로 거기다. 두 축은 독립인데 한쪽이 다른 쪽을 삼켰다.
+      if [ -n "${LEDGER_MSG:-}" ]; then reason="$LEDGER_MSG
+
+$reason"; fi
       jq -n --arg r "$reason" '{decision: "block", reason: $r}' 2>/dev/null
       exit 0
     fi

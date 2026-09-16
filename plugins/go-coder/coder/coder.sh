@@ -114,7 +114,9 @@ for t in "$@"; do
   t="$(printf '%s' "$t" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
   [ -n "$t" ] || continue
   case "$t" in
-    /*|*..*) emit 64 "대상 경로는 레포 상대경로여야 한다(절대경로·`..` 금지): $t"; exit 64 ;;
+    # ⚠ 백틱을 큰따옴표 안에 그대로 쓰면 **명령 치환**으로 평가된다(2026-09-16 리뷰).
+    #   그러면 `..` 가 실행돼 stderr 에 command not found 가 섞이고 사유 문구에서 그 조각이 사라진다.
+    /*|*..*) emit 64 "대상 경로는 레포 상대경로여야 한다(절대경로·'..' 금지): $t"; exit 64 ;;
   esac
   TLIST="$TLIST$t
 "
@@ -163,6 +165,15 @@ fi
 SNAP="$(mktemp -d)"; trap 'rm -rf "$SNAP"' EXIT
 git -C "$CWD" -c core.quotePath=false status --porcelain -uall 2>/dev/null \
   | sed -e 's/^...//' > "$SNAP/before.txt" || : > "$SNAP/before.txt"
+# ⭐⭐ **해시도 함께 뜬다**(2026-09-16 리뷰 must_fix). 위 주석이 「되돌리지 않고 **알리기만**
+#   한다」고 선언했는데 **알리는 코드가 없었다** — 착수 전부터 더럽던 파일을 자식이 고쳐도
+#   차집합에 안 나와 rc 0 으로 통과했고, README 의 rc 0 정의(「대상 파일만 바뀌었다」)가
+#   거짓이 됐다. 되돌리지 않는 판단은 그대로 두고 **알림만** 구현한다.
+: > "$SNAP/before.hash"
+while IFS= read -r _bf; do
+  [ -n "$_bf" ] && [ -f "$CWD/$_bf" ] || continue
+  printf '%s %s\n' "$(git -C "$CWD" hash-object "$_bf" 2>/dev/null || printf 'x')" "$_bf" >> "$SNAP/before.hash"
+done < "$SNAP/before.txt"
 
 # 계획 파일은 따로 백업한다(rc 68 복원용)
 PLAN_F="${CLAUDE_PLAN_FILE:-${CODER_PLAN_FILE:-}}"
@@ -234,7 +245,7 @@ if [ -n "$PLAN_F" ] && [ -f "$SNAP/plan.bak" ]; then
   if ! cmp -s "$PLAN_F" "$SNAP/plan.bak" 2>/dev/null; then
     cp "$SNAP/plan.bak" "$PLAN_F" 2>/dev/null || true
     emit 68 "자식이 부모의 계획 파일을 고쳤다(복원했다): $PLAN_F — ⛔ 통제가 깨진 것이니 사용자에게 말해라"
-    ledger 68 "plan_file_touched" "$G_BEFORE" -1 0 "$ELAPSED" "$NFILES"
+    ledger 68 "plan_file_touched" "$G_BEFORE" -1 -1 "$ELAPSED" "$NFILES"
     exit 68
   fi
 fi
@@ -249,6 +260,21 @@ while IFS= read -r f; do
   [ -n "$f" ] || continue
   if ! printf '%s' "$TLIST" | grep -Fxq "$f"; then printf '%s\n' "$f" >> "$SNAP/viol.txt"; fi
 done < "$SNAP/new.txt"
+# ⭐ 착수 전부터 미커밋이던 파일 중 **내용이 바뀐 것**을 알린다(되돌리지는 않는다).
+#   ⚠ 이것은 거부가 아니다 — 자식이 고쳤는지 부모가 작업 중이던 것인지 가릴 수 없기 때문이다.
+#   그래도 **침묵하지는 않는다**: 모르는 채로 rc 0 을 받으면 사람이 그대로 커밋한다.
+TOUCHED_PRE=""
+while IFS=' ' read -r _h _f; do
+  [ -n "$_f" ] || continue
+  printf '%s' "$TLIST" | grep -Fxq "$_f" && continue          # 대상 파일이면 바뀌는 것이 정상이다
+  _now=$(git -C "$CWD" hash-object "$_f" 2>/dev/null || printf 'y')
+  [ "$_now" = "$_h" ] || TOUCHED_PRE="$TOUCHED_PRE $_f"
+done < "$SNAP/before.hash"
+if [ -n "$TOUCHED_PRE" ]; then
+  printf '⚠ 착수 전부터 미커밋이던 파일이 바뀌었다(되돌리지 않았다):%s\n' "$TOUCHED_PRE" >&2
+  printf '   자식이 고쳤는지 네 작업이 이어진 것인지 가릴 수 없다 — **커밋 전에 직접 봐라.**\n' >&2
+fi
+
 if [ -s "$SNAP/viol.txt" ]; then
   # ⚠ **자식이 새로 더럽힌 것만** 되돌린다. 착수 전부터 미커밋이던 파일은 건드리지 않는다 —
   #   자식이 고쳤는지 부모가 작업 중이던 것인지 가릴 수 없고, 부모 작업을 지우는 것이 더 나쁘다.
@@ -257,7 +283,7 @@ if [ -s "$SNAP/viol.txt" ]; then
     git -C "$CWD" checkout -- "$f" 2>/dev/null || rm -f "$CWD/$f" 2>/dev/null || true
   done < "$SNAP/viol.txt"
   emit 66 "대상 파일 밖을 고쳤다(되돌렸다): $(tr '\n' ' ' < "$SNAP/viol.txt")"
-  ledger 66 "wrote_outside_targets" "$G_BEFORE" -1 0 "$ELAPSED" "$NFILES"
+  ledger 66 "wrote_outside_targets" "$G_BEFORE" -1 -1 "$ELAPSED" "$NFILES"
   exit 66
 fi
 

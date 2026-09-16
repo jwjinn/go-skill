@@ -42,6 +42,7 @@ done
 cat > /dev/null    # stdin(프롬프트) 소비
 case "${FAKE_MODE:-fix}" in
   fix)     printf 'FIXED\n' > target.txt ;;
+  prebumped) printf 'FIXED\n' > target.txt; printf '자식이 또 고쳤다\n' > other.txt ;;
   outside) printf 'FIXED\n' > target.txt; printf 'dirty\n' > other.txt ;;
   newfile) printf 'FIXED\n' > target.txt; printf 'x\n' > sneaky.txt ;;
   nofix)   : ;;
@@ -120,6 +121,31 @@ rc=$(run env FAKE_MODE=fix)
 [ "$rc" = "0" ] && ok "⑤ 부모의 미커밋이 있어도 정상 경로가 돈다" || ng "오탐" "rc=$rc $(cat "$T/log")"
 grep -q '부모가 작업 중' "$T/repo/other.txt" \
   && ok "⑤-b ⭐⭐ 부모의 미커밋 작업이 살아 있다(되돌리지 않았다)" || ng "부모 작업 유실" "$(cat "$T/repo/other.txt")"
+cleanup
+
+echo "=== ⭐⭐ 착수 전부터 더럽던 파일을 자식이 고치면 — 되돌리지 않되 **알린다**"
+# 2026-09-16 리뷰 must_fix: 주석은 「되돌리지 않고 **알리기만** 한다」고 선언했는데
+# **알리는 코드가 없었다.** 차집합에 안 나와 rc 0 으로 통과했고 README 의 rc 0 정의
+# (「대상 파일만 바뀌었다」)가 거짓이 됐다. 되돌리지 않는 판단은 그대로 두고 알림만 더했다.
+setup
+printf '부모가 작업 중\n' > "$T/repo/other.txt"      # 착수 전부터 더럽다
+rc=$( ( export PATH="$T/bin:$PATH" HOME="$T/home" CLAUDE_PROJECT_DIR="$T/repo"
+        cd "$T/repo" || exit 99
+        FAKE_MODE=prebumped bash "$CODER" --task "$T/task.md" --targets 'target.txt' \
+             --gate 'bash gate.sh' --cwd "$T/repo" --out "$T/out.json"
+      ) >"$T/log" 2>&1; printf '%s' $? )
+[ "$rc" = "0" ] && ok "⑰ 되돌리지 않으므로 rc 0 은 유지된다" || ng "겹침에 rc 를 바꿨다" "rc=$rc $(cat "$T/log")"
+grep -q '자식이 또 고쳤다' "$T/repo/other.txt" && ok "⑰-b 부모 파일을 되돌리지 않았다" || ng "되돌렸다" "$(cat "$T/repo/other.txt")"
+grep -q '착수 전부터 미커밋이던 파일이 바뀌었다' "$T/log" \
+  && ok "⑰-c ⭐⭐ 그 사실을 **알린다**(선언된 설계의 나머지 절반)" || ng "침묵했다" "$(cat "$T/log")"
+cleanup
+
+setup
+# 대조군 — 부모 파일이 그대로면 알리지 않는다(오탐 방지)
+printf '부모가 작업 중\n' > "$T/repo/other.txt"
+rc=$(run env FAKE_MODE=fix)
+grep -q '착수 전부터 미커밋이던 파일이 바뀌었다' "$T/log" \
+  && ng "⑱ 안 바뀐 파일에 알렸다" "$(cat "$T/log")" || ok "⑱ 부모 파일이 그대로면 조용하다"
 cleanup
 
 echo "=== ⭐⭐ 통제 ③ 완료 후 게이트가 붉으면 거부한다 (rc 69)"

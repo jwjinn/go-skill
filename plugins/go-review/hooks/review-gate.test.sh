@@ -138,8 +138,11 @@ echo "=== ⭐⭐ 원장 누락 축 (2026-09-16)"
 # 다른 세션 실사용 보고: 라운드 둘을 돌리고 must_fix 13건을 반영했는데 원장 기록이 0건이었다.
 # 원인은 Skill 대신 Agent 로 리뷰어를 직접 띄운 것 — 결함은 잡혔고 **측정만 사라졌다**.
 setup s20; printf '# p\n- [x] 할일\n' > "$T/.claude/plan-active.md"   # 계획은 닫아 둔다(경고 축과 분리)
-mkdir -p "$T/.claude/review/runs/20260916-192659"
+mkdir -p "$T/.claude/review/runs/20260916-192659" "$T/docs/리뷰-이력"
 printf '{}' > "$T/.claude/review/runs/20260916-192659/merged.json"
+# ⭐ 원장 파일은 **있고** 그 라운드만 없는 상태여야 「누락」이다(2026-09-16 리뷰 반영).
+#   파일 자체가 없는 것은 「어디 있는지 모른다」로 따로 말하고, 그 조건은 s43 이 잰다.
+printf '{"round":"다른것"}\n' > "$T/docs/리뷰-이력/rounds.jsonl"
 out=$(run)
 case "$out" in *"원장에 없다"*) ok "① 라운드가 원장에 없으면 알린다" "알림" ;;
                *) ng "① 원장 누락 미탐지" "알림" "$out" ;; esac
@@ -280,6 +283,50 @@ setmtime "$T/.claude/review-active.md" "$NOW"
 out=$(run)
 case "$out" in *"반영했다고 체크한 항목"*) ng "③ 옛 형식 파일에 발화했다" "조용" "$out" ;;
                *) ok "③ ⭐⭐ 확인 줄을 하나도 안 쓴 파일에는 조용하다(이행기)" "조용" ;; esac
+cleanup
+
+echo "=== ⭐⭐ 차단할 때도 원장·확인 메시지를 버리지 않는다 (2026-09-16 리뷰 must_fix)"
+# ⛔ 종전에는 차단 경로가 finish 를 안 지나 block 만 냈고, left>0 인 **정상 상태**(반영 진행 중)
+#   에서는 🧾「근거 없이 체크했다」 경고가 한 번도 화면에 나오지 않았다 — 그 경고가 가장
+#   필요한 구간이 바로 거기다. 두 축은 독립인데 한쪽이 다른 쪽을 삼켰다.
+setup s40
+printf '# r\n- [x] [blocker] a.go:1 — 고쳤다\n      확인: `go test` 초록\n- [x] [major] b.go:2 — 고쳤다\n- [ ] [major] c.go:3 — 아직\n' \
+  > "$T/.claude/review-active.md"
+setmtime "$T/.claude/review-active.md" "$NOW"
+out=$(run)
+case "$out" in *'"decision"'*) ok "① 미해결이 있으면 여전히 차단한다" "BLOCK" ;;
+               *) ng "차단 실패" "BLOCK" "$out" ;; esac
+case "$out" in *"반영했다고 체크한 항목"*) ok "①-b ⭐⭐ 차단 사유에 🧾 확인-누락 경고가 함께 실린다" "둘 다" ;;
+               *) ng "확인 경고가 삼켜졌다" "둘 다" "$out" ;; esac
+cleanup
+
+setup s41
+# 원장 누락 + 차단이 겹치는 경우 — 📒 도 함께 실려야 한다
+mkdir -p "$T/.claude/review/runs/R42"; printf '{}' > "$T/.claude/review/runs/R42/merged.json"
+mkdir -p "$T/docs/리뷰-이력"; printf '{"round":"other"}\n' > "$T/docs/리뷰-이력/rounds.jsonl"
+printf '# r\n- [ ] [blocker] a.go:1 — 아직\n' > "$T/.claude/review-active.md"
+setmtime "$T/.claude/review-active.md" "$NOW"
+out=$(run)
+case "$out" in *"원장에 없다"*) ok "② 차단 사유에 📒 원장 누락도 함께 실린다" "둘 다" ;;
+               *) ng "원장 경고가 삼켜졌다" "둘 다" "$out" ;; esac
+cleanup
+
+echo "=== ⭐ 원장 경로는 CLAUDE_REVIEW_HISTORY_DIR 를 존중한다 (정본이 여섯 자리다)"
+setup s42; printf '# p\n- [x] 할일\n' > "$T/.claude/plan-active.md"
+mkdir -p "$T/.claude/review/runs/R50" "$T/other-history"
+printf '{}' > "$T/.claude/review/runs/R50/merged.json"
+printf '{"round":"R50"}\n' > "$T/other-history/rounds.jsonl"
+out=$(printf '{"session_id":"%s","transcript_path":"%s/tr.jsonl"}' "$SESS" "$T" \
+      | CLAUDE_PROJECT_DIR="$T" CLAUDE_REVIEW_HISTORY_DIR="$T/other-history" bash "$HOOK" 2>/dev/null)
+case "$out" in *"원장에 없다"*|*"원장 파일을 찾지 못했다"*) ng "③ env 를 무시했다" "조용" "$out" ;;
+               *) ok "③ ⭐ 옮긴 원장에 기록돼 있으면 조용하다" "조용" ;; esac
+cleanup
+
+setup s43; printf '# p\n- [x] 할일\n' > "$T/.claude/plan-active.md"
+mkdir -p "$T/.claude/review/runs/R51"; printf '{}' > "$T/.claude/review/runs/R51/merged.json"
+out=$(run)   # 원장 파일 자체가 없다
+case "$out" in *"원장 파일을 찾지 못했다"*) ok "④ ⭐ 원장 부재는 「누락」과 다르게 말한다" "미측정" ;;
+               *) ng "부재를 누락으로 말했다" "미측정" "$out" ;; esac
 cleanup
 
 echo "=== ⑦ 사보타주 — 탐지기가 정말 그 조건을 보는가"

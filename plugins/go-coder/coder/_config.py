@@ -70,7 +70,8 @@ def optin_state(project_root, plan_file):
     """(켤 수 있나, 사유)."""
     p = os.path.join(project_root, ".claude", "coder", "opt-in.json")
     if not os.path.exists(p):
-        return False, "not_opted_in(옵트인 기록 없음 — `/go` 가 「쓴다」 답을 받으면 쓴다)"
+        return False, ("not_opted_in(옵트인 기록 없음 — `/go` **§0-e** 가 묻고 기록한다. "
+                       "그 절을 건너뛰면 여기서 영원히 닫힌다)")
     try:
         d = json.load(io.open(p, encoding="utf-8"))
     except Exception as e:
@@ -151,7 +152,8 @@ def main():
     print("#   읽은 파일: %s (%s)" % (path, origin))
     print("#   enabled=%s · 이번 호출: %s — %s" % (mode, "켬" if enabled else "끔", why))
     if mode == "ask" and not enabled and codex and profile and os.path.exists(ppath):
-        print("#   ⭐ 켜려면 `/go` 가 사용자에게 물어 .claude/coder/opt-in.json 을 써야 한다.")
+        print("#   ⭐ 켜려면 `/go` **§0-e** 가 사용자에게 물어 .claude/coder/opt-in.json 을 써야 한다.")
+        print("#      ⚠ 그 절을 건너뛰면 사용자가 「쓴다」고 답해도 켤 방법이 없다.")
     print("")
     print("CODER_ENABLED=%s" % (1 if enabled else 0))
     print("CODER_MODE=%s" % mode)
