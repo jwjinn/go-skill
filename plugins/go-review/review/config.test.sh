@@ -182,6 +182,70 @@ else
   echo "  skip 지시문 축(review-loop.md 를 찾지 못했다)"
 fi
 
+# ── ⑫ ⭐⭐ 작은 diff 에서 세 번째 자리를 비운다 (2026-09-17) ────────────────────
+#
+# ⚠ 축이 넷이다. 하나만 보면 나머지가 깨져도 통과한다:
+#   ①큰 diff 면 유지 ②작은 diff 면 비움 ③**못 재면 유지**(모르면 엄격한 쪽) ④경계값
+#   특히 ③이 없으면 「언제나 비우는」 구현이 ②만으로 통과한다.
+echo "── ⑫ diff 크기로 세 번째 자리 ──"
+D="$W/diffs"; mkdir -p "$D"
+mk() { # mk <파일> <변경줄수>
+  { printf -- '--- a/x\n+++ b/x\n'; i=0; while [ "$i" -lt "$2" ]; do printf '+줄 %d\n' "$i"; i=$((i+1)); done; } > "$1"
+}
+mk "$D/big.patch" 600
+mk "$D/small.patch" 100
+mk "$D/edge-under.patch" 499
+mk "$D/edge-at.patch" 500
+
+# ⛔⛔ **자기 픽스처를 써라.** 첫 판은 구성 인자를 안 넘겨서 `_config.py` 가 cwd 로 구성을
+#   찾았고, 그래서 **실행 위치에 따라 결과가 달라졌다** — 플러그인 기본은 P2(cross 가 원래
+#   비어 있다)이고 프로젝트 구성은 P1 이다. go-review 디렉토리에서 돌리면 4검사가 붉고
+#   워크트리에서 돌리면 초록이었다. 세 번째 자리가 **있는** 구성을 명시해야 이 축이 성립한다.
+#   ⚠ codex 유무에도 흔들리지 않게 `custom` 으로 자리를 전부 claude 로 박는다.
+printf '%s' '{"preset":"custom","seats":{"contract":"claude","blind":"claude","cross":"claude","merger":"claude"}}' > "$W/c-three.json"
+seats_of() { python3 "$SELF/_config.py" "$W/c-three.json" --diff "$1" 2>/dev/null | grep 'CLAUDE_REVIEW_REVIEWERS=' | head -1; }
+
+r=$(seats_of "$D/big.patch")
+case "$r" in *cross*) echo "  ok   ⑫-a 600줄이면 세 번째 자리가 산다"; pass=$((pass+1)) ;;
+  *) echo "  FAIL ⑫-a 600줄인데 세 번째 자리가 비었다 ($r)"; fail=$((fail+1)) ;; esac
+
+r=$(seats_of "$D/small.patch")
+case "$r" in *cross*) echo "  FAIL ⑫-b 100줄인데 세 번째 자리가 그대로다 ($r)"; fail=$((fail+1)) ;;
+  *) echo "  ok   ⑫-b 100줄이면 세 번째 자리를 비운다"; pass=$((pass+1)) ;; esac
+
+# ⭐ 대조군 — **못 재면 비우지 않는다.** 이것이 없으면 「언제나 비우는」 구현이 통과한다.
+r=$(python3 "$SELF/_config.py" "$W/c-three.json" 2>/dev/null | grep 'CLAUDE_REVIEW_REVIEWERS=' | head -1)
+case "$r" in *cross*) echo "  ok   ⑫-c ⭐ 대조군 — diff 를 안 주면 비우지 않는다(모르면 엄격한 쪽)"; pass=$((pass+1)) ;;
+  *) echo "  FAIL ⑫-c diff 를 안 줬는데 자리를 비웠다 — 모르는 것을 근거로 줄였다 ($r)"; fail=$((fail+1)) ;; esac
+
+r=$(seats_of "$D/edge-at.patch")
+case "$r" in *cross*) echo "  ok   ⑫-d 경계 500줄은 **유지**다(미만일 때만 비운다)"; pass=$((pass+1)) ;;
+  *) echo "  FAIL ⑫-d 500줄에서 비웠다 — 경계가 어긋났다"; fail=$((fail+1)) ;; esac
+r=$(seats_of "$D/edge-under.patch")
+case "$r" in *cross*) echo "  FAIL ⑫-e 499줄인데 유지했다 — 경계가 어긋났다"; fail=$((fail+1)) ;;
+  *) echo "  ok   ⑫-e 경계 499줄은 비운다"; pass=$((pass+1)) ;; esac
+
+# ⭐ 되돌릴 수 있나 — 경계를 0 으로 주면 언제나 세 자리다.
+r=$(CLAUDE_REVIEW_THIRD_SEAT_LINES=0 python3 "$SELF/_config.py" "$W/c-three.json" --diff "$D/small.patch" 2>/dev/null | grep 'CLAUDE_REVIEW_REVIEWERS=' | head -1)
+case "$r" in *cross*) echo "  ok   ⑫-f CLAUDE_REVIEW_THIRD_SEAT_LINES=0 이면 언제나 세 자리"; pass=$((pass+1)) ;;
+  *) echo "  FAIL ⑫-f 경계를 0 으로 줘도 비운다 — 되돌릴 수단이 없다"; fail=$((fail+1)) ;; esac
+
+# ⚠ `+++`/`---` 머리말을 변경 줄로 세면 파일 수만큼 부푼다 — 그 오차를 잠근다.
+{ printf -- '--- a/x\n+++ b/x\n'; i=0; while [ "$i" -lt 498 ]; do printf '+줄 %d\n' "$i"; i=$((i+1)); done;
+  printf -- '--- a/y\n+++ b/y\n'; printf '+한 줄\n'; } > "$D/two-files.patch"
+r=$(seats_of "$D/two-files.patch")
+case "$r" in *cross*) echo "  FAIL ⑫-g 머리말을 변경 줄로 셌다(499줄인데 500 이상으로 읽혔다)"; fail=$((fail+1)) ;;
+  *) echo "  ok   ⑫-g ⭐ 파일 머리말(+++/---)을 변경 줄로 세지 않는다"; pass=$((pass+1)) ;; esac
+
+# ⭐⭐ 지시문이 실제로 --diff 를 넘기나 — 스크립트만 고치면 조용히 안 먹는다.
+if [ -f "$RL" ]; then
+  if grep -q '_config.py --diff' "$RL"; then
+    echo "  ok   ⑫-h ⭐ review-loop.md 가 _config.py 에 --diff 를 넘긴다"; pass=$((pass+1))
+  else
+    echo "  FAIL ⑫-h 지시문이 --diff 를 안 넘긴다 — 규칙이 배선되지 않아 언제나 세 자리다"; fail=$((fail+1))
+  fi
+fi
+
 rm -rf "$W"
 echo
 echo "pass=$pass fail=$fail"

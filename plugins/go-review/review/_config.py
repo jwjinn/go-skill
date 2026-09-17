@@ -42,6 +42,23 @@ def load(path):
         return {}
 
 
+def pop_diff_arg(argv):
+    """`--diff <patch>` 를 argv 에서 떼어낸다 — 반환 (patch, 남은 argv).
+
+    ⚠ `resolve_config_path` 가 `argv[1]` 을 구성 파일로 읽으므로, 먼저 떼지 않으면
+      `--diff` 가 구성 파일 경로로 해석된다.
+    """
+    out, patch, i = [], None, 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--diff" and i + 1 < len(argv):
+            patch = argv[i + 1]; i += 2; continue
+        if a.startswith("--diff="):
+            patch = a.split("=", 1)[1]; i += 1; continue
+        out.append(a); i += 1
+    return patch, out
+
+
 def resolve_config_path(argv):
     """구성 파일을 **프로젝트 우선**으로 찾는다 — 인자 > 프로젝트 > 플러그인 기본.
 
@@ -128,6 +145,69 @@ def cases_hash(project_root):
     return h.hexdigest()[:16]
 
 
+# ⭐⭐ 작은 diff 에서는 세 번째 자리를 비운다 (2026-09-17 · 원장 114라운드 실측)
+#
+#   근거는 두 수다. **500줄 이상**에서 세 번째 리뷰어(cross)는 must_fix 의 **12%(60건)**를
+#   단독으로 잡았다 — 빼면 그만큼 순손실이다. **500줄 미만**에서는 단독 must_fix 가 **0건**이다.
+#
+#   ⚠⚠ 그 0 을 「작은 diff 에서는 못 잡는다」로 읽지 마라. 그 구간 13라운드 중 세 번째
+#     리뷰어가 **실제로 돈 것은 3라운드뿐**이다(나머지는 codex 부재로 자리가 비었다).
+#     표본 3 이다. 그래서 이 규칙이 하는 일은 「새로 줄이는 것」이 아니라 **지금 관행을
+#     명시하는 것**이고, 절감은 codex 가 살아 있는 라운드에서만 실제로 생긴다.
+#
+#   ⭐ **줄 수를 모르면 줄이지 않는다.** diff 경로가 안 주어지면 세 자리를 그대로 둔다 —
+#     비용은 더 들지만 품질은 안전한 쪽이다. 「모르면 엄격하게」.
+THIRD_SEAT_MIN_LINES_DEFAULT = 500
+
+
+def diff_changed_lines(patch_path):
+    """diff 의 변경 줄 수. 못 재면 None — 「0줄」과 「못 쟀다」는 다르다."""
+    if not patch_path or not os.path.exists(patch_path):
+        return None
+    try:
+        n = 0
+        with io.open(patch_path, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                # ⚠ `+++`·`---` 는 파일 머리말이지 변경 줄이 아니다. 세면 파일 수만큼 부푼다.
+                if ln.startswith("+++") or ln.startswith("---"):
+                    continue
+                if ln.startswith("+") or ln.startswith("-"):
+                    n += 1
+        return n
+    except Exception:
+        return None
+
+
+def thin_third_seat(seats, patch_path):
+    """작은 diff 면 cross 자리를 비운다. 반환: (seats, note) — 바꾼 것이 없으면 note 는 None."""
+    who = seats.get("cross", "none")
+    if who == "none":
+        return seats, None
+    try:
+        thr = int(os.environ.get("CLAUDE_REVIEW_THIRD_SEAT_LINES")
+                  or THIRD_SEAT_MIN_LINES_DEFAULT)
+    except ValueError:
+        thr = THIRD_SEAT_MIN_LINES_DEFAULT
+    lines = diff_changed_lines(patch_path)
+    if lines is None:
+        # 모르면 그대로 둔다. 그 사실을 출력에 남겨 「왜 세 명인가」가 보이게 한다.
+        return seats, ("  ⚠ diff 크기를 재지 못해 세 번째 자리를 그대로 둔다"
+                       "(`--diff <patch>` 를 주면 500줄 미만에서 비운다).")
+    if lines >= thr:
+        return seats, None
+    seats = dict(seats)
+    seats["cross"] = "none"
+    note = (
+        "⭐ **diff %d줄(< %d)이라 세 번째 자리(cross)를 비웠다** — 라운드당 약 22만 토큰을 아낀다.\n"
+        "   근거(원장 114라운드): 500줄 이상에서 이 자리는 must_fix 의 **12%%**를 단독으로\n"
+        "   잡았고, 500줄 미만에서는 단독 must_fix 가 **0건**이었다.\n"
+        "   ⚠ 그 0 은 표본 3 이다(그 구간에서 이 자리가 거의 안 돌았다) — 「못 잡는다」가 아니라\n"
+        "     「재지 않았다」에 가깝다. 되돌리려면 `CLAUDE_REVIEW_THIRD_SEAT_LINES=0`."
+        % (lines, thr)
+    )
+    return seats, note
+
+
 def gate_local_qualification(seats, project_root, want_model=""):
     """`local` 자리에 **자격을 통과한 모델만** 앉힌다 (2026-09-17 · fail-closed).
 
@@ -210,7 +290,11 @@ def gate_local_qualification(seats, project_root, want_model=""):
 
 
 def main():
-    cfg_path, cfg_src = resolve_config_path(sys.argv)
+    # ⭐ diff 경로는 인자(`--diff`) 또는 env(`CLAUDE_REVIEW_DIFF`)로 받는다. 둘 다 없으면
+    #   크기를 모르므로 세 자리를 그대로 둔다(모르면 엄격한 쪽).
+    diff_path, argv = pop_diff_arg(sys.argv)
+    diff_path = diff_path or os.environ.get("CLAUDE_REVIEW_DIFF") or ""
+    cfg_path, cfg_src = resolve_config_path(argv)
     cfg = load(cfg_path)
 
     preset = cfg.get("preset") or "P1"
@@ -222,6 +306,9 @@ def main():
     demote_note = None
     if not codex_available():
         preset, seats, demote_note = demote_without_codex(preset, seats)
+    # ⭐ diff 크기로 세 번째 자리를 비우는 것도 **구성 해석의 일부**다.
+    #   ⚠ 순서가 중요하다 — `demote_without_codex` 가 cross 를 채울 수 있으므로 그 **뒤**에 온다.
+    seats, thin_note = thin_third_seat(seats, diff_path)
     # ⭐ 로컬 모델 자격도 **구성 해석의 일부**다 — 같은 이유로 여기 둔다(지시문 규율이 아니다).
     proj_root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     # ⭐ 어느 로컬 모델을 쓸지는 구성이 정한다(`models.local`). 비어 있으면 모델 대조를
@@ -238,6 +325,9 @@ def main():
     if demote_note:
         print()
         print(demote_note)
+    if thin_note:
+        print()
+        print(thin_note)
     if local_note:
         print()
         print(local_note)
