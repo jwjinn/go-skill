@@ -387,7 +387,10 @@ if [ -f "$SK" ]; then
   grep -q 'coordinator-send.sh" --to dispatch:' "$SK" && ok "도중 메시지도 래퍼를 처방한다" || bad "래퍼 처방이 없다"
   grep -q 'nudge-only' "$SK" && ok "죽은 워커 깨우기도 래퍼다" || bad "819 절이 맨 명령이다"
   grep -q 'send --type escalation' "$SK" && ok "워커 프리앰블에 escalation 채널이 있다" || bad "escalation 채널이 없다"
-  grep -q 'check --ack --json' "$SK" && ok "대기 루프가 check --ack 를 처방한다" || bad "check --ack 처방이 없다"
+  # ⛔ 값 없는 `--ack` 를 처방하면 CLI 가 명령 전체를 거부한다(2026-09-17 실측 · 읽힘 0/12).
+  #   그래서 이 검사는 두 가지를 본다: ①ack 를 처방한다 ②값 없는 형태가 **없다**.
+  grep -q 'check --ack <delivery_id>' "$SK" && ok "대기 루프가 check --ack <delivery_id> 를 처방한다" || bad "check --ack 처방이 없다"
+  grep -qE -- '--ack (--|$)' "$SK" && bad "값 없는 --ack 가 남아 있다(CLI 가 거부한다)" || ok "⭐ 대조군 — 값 없는 --ack 가 없다"
 else
   bad "SKILL.md 를 못 찾았다($SK)"
 fi

@@ -287,21 +287,25 @@ before=$(shasum -a 256 "$R/.claude/plan-active.md" | cut -d' ' -f1)
 make_mock "$(good_result red)" 'printf "# 비었다\n" > "$PWD/.claude/plan-active.md"'
 rc=$(run_with_mocks "$R" --mode full)
 after=$(shasum -a 256 "$R/.claude/plan-active.md" | cut -d' ' -f1)
-[ "$rc" = "68" ] && ok "C1 자식이 계획 파일을 고치면 → rc 68" || no "C1 자식이 계획 파일을 고치면 → rc 68" "실제 rc=$rc"
-[ "$before" = "$after" ] && ok "C1b 계획 파일이 원본으로 복원된다" || no "C1b 계획 파일이 원본으로 복원된다"
+[ "$rc" = "68" ] && ok "C1 자식이 도는 동안 계획 파일이 바뀌면 → rc 68" || no "C1 자식이 도는 동안 계획 파일이 바뀌면 → rc 68" "실제 rc=$rc"
 
-# ⭐ 복원은 **덮어쓰기**다 — 되돌리기 전 내용을 남기지 않으면 가드가 지키려던 것을 가드가 삼킨다.
-#   2026-09-15 실사용에서 이 경로가 발화했는데 원인이 자식이 아니라 **부모**였다(부모 세션이
-#   자식이 도는 동안 계획을 파킹했다). 그때 `.at-exit` 가 없으면 부모의 변경이 사본 없이 사라진다.
-guard_dir=$(reason_of "$T/out.json" | sed -n 's/.*보존: \([^ ·]*\).*/\1/p')
-if [ -n "$guard_dir" ] && [ -f "$guard_dir/plan.at-exit" ] && grep -q '비었다' "$guard_dir/plan.at-exit" 2>/dev/null; then
-  ok "C1c ⭐ 복원 전 내용을 .at-exit 로 보존한다(부모 변경을 삼키지 않는다)"
+# ⭐⭐ 2026-09-17 개정 — **되돌리지 않는다**(사용자 결정). 종전에는 시작 시점 사본으로 덮었고
+#   이 검사도 「복원됐나」를 봤다. 그 복원이 실제로는 부모의 작업을 지우고 있었다 —
+#   이 도구는 자식과 부모를 **가르지 못하고**(C1d 가 그 사실을 잠근다), 정상 경로의 자식은
+#   계획 경로가 임시로 덮여 있어 고칠 동기가 없다. 실측 발화 건은 전부 부모였다.
+#   ⇒ 축이 셋이다: ①rc 68 이 난다 ②지금 내용이 **그대로 있다** ③시작 시점 사본이 옆에 남는다.
+#     ②만 보면 「아무것도 안 하는」 구현이 통과하므로 ③이 함께 있어야 한다.
+[ "$before" != "$after" ] && ok "C1b ⭐⭐ 되돌리지 않았다 — 자식이 쓴 내용이 그대로 있다" \
+  || no "C1b ⭐⭐ 되돌리지 않았다" "해시가 시작 시점과 같다 — 덮어썼다"
+if ls "$R/.claude/plan-active.md".pre-* >/dev/null 2>&1 \
+   && grep -q '미완료 항목' "$R/.claude/plan-active.md".pre-* 2>/dev/null; then
+  ok "C1c ⭐ 시작 시점 사본이 계획 파일 옆에 남는다(되찾을 수 있다)"
 else
-  no "C1c ⭐ 복원 전 내용을 .at-exit 로 보존한다" "guard_dir=$guard_dir"
+  no "C1c ⭐ 시작 시점 사본이 계획 파일 옆에 남는다" "$(ls "$R/.claude/" 2>&1)"
 fi
-[ -n "$guard_dir" ] && grep -q '가르지 못한다' "$T/out.json" 2>/dev/null \
+grep -q '가르지 못한다' "$T/out.json" 2>/dev/null \
   && ok "C1d ⭐ 사유가 자식 탓으로 단정하지 않는다(부모일 수도 있다고 말한다)" \
-  || no "C1d ⭐ 사유가 자식 탓으로 단정하지 않는다"
+  || no "C1d ⭐ 사유가 자식 탓으로 단정하지 않는다" "사유=$(reason_of "$T/out.json")"
 
 R="$T/r-c2"; new_repo "$R"
 printf '# 계획\n\n- [ ] 미완료 항목\n' > "$R/.claude/plan-active.md"

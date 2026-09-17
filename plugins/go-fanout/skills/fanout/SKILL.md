@@ -68,6 +68,7 @@ GF="${CLAUDE_PLUGIN_ROOT}"
 for d in "$GF/../go-review" "$GF"/../../go-review/*/; do [ -d "$d" ] && { GR=$(cd "$d" && pwd); break; }; done
 sib() { bash "$GR/hooks/_plugins.sh" "$@"; }   # ⭐ 탐색의 정본은 go-review 안에 한 벌뿐이다
 GT=$(sib go-tester tester/_config.py)
+GC=$(sib go-coder  coder/_config.py)      # ⭐ 구현 위임 — 계획에 「로컬 구현」이 있으면 필요하다
 
 bash "$GR/hooks/doctor.sh"               # go-review 체인이 살아 있나
 ```
@@ -257,9 +258,11 @@ WT=$(orca orchestration worker-show --dispatch <id> --json | jq -r '.result.work
 연결되어 있지 않다.** 실측: 그날 워커는 위임을 한 번도 쓰지 않고 자기가 직접 테스트를 썼다 —
 설계대로 「안 쓰는 쪽」으로 닫힌 것이고, 그것 자체는 안전하다. 다만 **계획이 기대한 절감이 0** 이다.
 
-⛔ **옵트인을 미리 넣어도 소용없다.** 그 기록은 계획 파일의 **내용 해시**에 묶이는데, 워커는
+⛔ **옵트인을 미리 넣어도 소용없다.** 그 기록은 계획의 **범위 해시**에 묶이는데, 워커는
 시드받은 초안을 **자기가 다시 쓴다**(실측 — 워커가 실측 근거를 넣어 다시 썼다). 그 순간 해시가
 달라져 무효가 된다(`optin_stale`).
+⚠ 2026-09-17 부터 그 해시는 **체크박스 상태를 뺀** 값이다 — 진행하며 항목을 닫는 것만으로는
+무효가 되지 않는다. 그래도 워커가 본문을 다시 쓰면 범위가 달라진 것이라 무효가 맞다.
 
 ⇒ 남는 경로는 하나다. **워커 폴더의 구성값을 `on` 으로 둔다.** `plan-draft.md` 를 시드하는
 **같은 자리에서** 함께 해라:
@@ -291,6 +294,48 @@ PY
 > 테스트 위임이 켜져 있다. 계획에 `위임 가능 (full)` 또는 `일부 위임` 이라 적힌 항목에 닿으면
 > `$GT/tester/tester.sh` 를 부르고(위 §0 의 `sib`), 그 밖에는 네가 직접 써라.
 > 「일부 위임」이면 **구현을 먼저 끝내고 테스트만** 넘겨라(자식은 소스를 고칠 수 없다).
+
+### ⛔⛔ 구현 위임(go-coder)도 계획에 있으면 — **따로 켜야 한다** (2026-09-17 추가)
+
+⚠ 위 절차는 **테스트 위임 전용**이다. `go-coder` 는 다른 도구이고 구성 파일도 옵트인도
+따로다(`.claude/coder/config.json` · `.claude/coder/opt-in.json`). 종전에 이 문서는 go-coder 를
+**한 번도 언급하지 않았고**, 그래서 코디네이터가 `_config.py` 코드를 읽어 절차를 유추해야 했다.
+계획의 격자 판정에 「로컬 구현」이 있는데 이 절을 건너뛰면 그 항목은 전부 세션 모델이 맡는다.
+
+```bash
+python3 - "$WT" <<'PY'
+import io, json, sys
+p = sys.argv[1] + "/.claude/coder/config.json"
+try:
+    d = json.load(io.open(p, encoding="utf-8"))
+except Exception:
+    raise SystemExit("구성 파일이 없다 — 이 프로젝트는 go-coder 를 쓰지 않는다")
+d["enabled"] = "on"
+d["_왜 on 인가"] = ["워커는 사람에게 물을 수 없어 옵트인을 만들지 못한다.",
+                   "코디네이터가 계획 단계에서 받은 승인을 여기로 옮긴 것이다.",
+                   "⚠ 워커 폴더에만 둔다 — 레포에 커밋된 구성은 ask 그대로다."]
+json.dump(d, io.open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+print("워커 구성을 on 으로:", p)
+PY
+```
+
+⛔ **구성 파일이 없으면 거기서 멈춰라.** `profile` 이 비어 있으면 `_config.py` 가
+`no_profile` 로 닫고, 그 상태에서는 「쓴다」고 답해도 돌지 않는다. 프로파일 이름과 그것이
+가리키는 모델을 **계획 단계에서** 확인해 두어라.
+⚠ codex 프로파일은 `~/.codex/config.toml` 안에만 있는 것이 아니다 — 별도 파일
+(`~/.codex/<이름>.config.toml`)로 사는 경우가 있고, 그것을 모르면 「없는 프로파일」로 오진한다
+(2026-09-17 실측).
+
+⚠ **워커 프리앰블에 한 줄을 넣어라**:
+
+> 구현 위임이 켜져 있다. 계획에 `로컬 구현` 이라 적힌 항목에 닿으면 `$GC/coder/coder.sh` 를
+> 부르고, 그 밖에는 네가 직접 구현해라. ⛔ **부르기 전에 그 항목의 게이트가 붉은지 확인해라**
+> — 이미 초록이면 rc 67 로 거부된다(고칠 것이 없으면 「고쳤다」를 판정할 수 없다).
+> `--targets` 와 `--gate` 는 **계획이 정한 것을 그대로** 넘겨라. 네가 넓히지 마라.
+
+⚠⚠ 테스트 위임과 **한 번에 묻지 마라.** 구현을 넘기는 것은 테스트를 넘기는 것보다 큰 결정이고,
+한 번의 「쓴다」로 둘이 켜지면 사람이 무엇에 답했는지 모르게 된다. `/go` §0-d 와 §0-e 가 그
+둘을 따로 묻는 이유가 이것이다.
 
 ### ⚠ 첫 파도는 **한 워커만** 켜라 — 긴 작업의 동시성은 미측정이다
 
@@ -349,10 +394,15 @@ Orca 가 이 앞에 자기 lifecycle 프리앰블(`worker_done` 규약 등)을 �
   전제가 틀렸다. 종전에는 채널이 `ask` 뿐이라 이런 것을 **말할 자리가 없었고**, 워커는 혼자
   판단하거나 종료 보고에만 적었다(그러면 파도가 끝난 뒤에 읽힌다).
   ⚠ `ask` 는 너를 멈춰 세우고 `escalation` 은 멈추지 않는다. 진행하면서 알려라.
-- ⛔⛔ **그리고 진행하면서 `orca orchestration check --ack --json` 을 불러라**
+- ⛔⛔ **그리고 진행하면서 `orca orchestration check --json` 을 불러라**
   (블로킹 아님 · 온 것만 가져온다). 코디네이터의 답은 **네가 부를 때만 도착한다.**
   부르는 시점은 둘이다: **한 항목을 끝낼 때마다**, 그리고 **터미널에 「코디네이터 메시지가
   왔다」가 찍히면 즉시**(코디네이터의 래퍼가 그렇게 깨운다).
+  ⛔⛔ **앞 배치를 처리했으면 다음 호출에 `--ack <delivery_id>` 를 붙여라.** 그 값은 **앞
+  응답이 준다.** `--ack` 를 **값 없이** 쓰면 CLI 가 `--ack requires a value` 로 **명령 전체를
+  거부**하고, 그러면 읽음 표시가 갱신되지 않아 같은 배치가 계속 재생된다(2026-09-17 실측 —
+  코디네이터가 보낸 12건이 **한 건도 읽히지 않았다**). 정본 문법은 `orca skills get
+  orchestration` 이 갖고 있다.
   ⚠ 실측(2026-09-15): 워커가 보안 변경을 두 번 물었고 코디네이터가 두 번 답했는데, 그 워커의
   완료 보고는 「**답을 받지 못해** 결정은 넘겼습니다」였다. 막히지 않으면 안 부르는 것이 설계라
   그 규약이 없으면 답이 도착하지 않는다.
@@ -450,14 +500,26 @@ gh pr view <이미 끝난 워커 PR> --json files --jq '.files[].path' | grep '<
 ## 5. 코디네이터의 대기 루프
 
 ```bash
+# 첫 호출 — ack 할 앞 배치가 없다
 orca orchestration check --wait --types worker_done,escalation,question \
-  --timeout-ms 900000 --ack --json
+  --timeout-ms 900000 --json
+
+# 그 배치를 전부 처리한 뒤 — 앞 응답이 준 delivery_id 로 ack 하면서 다음을 받는다
+orca orchestration check --ack <delivery_id> --wait \
+  --types worker_done,escalation,question --timeout-ms 900000 --json
 ```
 
 - **타임아웃은 실패가 아니다.** 코딩 작업은 15~60분이 예사다. `{count:0}` 이면 다시 기다려라.
   워커를 죽이지 마라.
-- ⭐ `--ack` 는 **메시지를 전부 처리한 뒤에** 붙인다(아래 주의 참조). 안 붙이면 읽음 표시가
-  남지 않아 같은 메시지를 다음 턴에 또 만나고, Stop 훅이 그것으로 턴을 막는다.
+- ⛔⛔ **`--ack` 는 값을 받는다.** `--ack <delivery_id>` 이고 그 값은 **앞 응답이 준다.**
+  값 없이 쓰면 CLI 가 `--ack requires a value` 로 **명령 전체를 거부**한다 — 메시지를 못
+  받는 것이 아니라 **명령이 실패한** 것이라, JSON 을 파싱하면 `count: None` 이 나와
+  「메시지 없음」처럼 보인다. 2026-09-17 에 그것을 밟았고 코디네이터→워커 12건이 전부
+  미읽음으로 남았다.
+- ⭐ ack 는 **그 배치의 메시지를 전부 처리한 뒤에** 한다. 안 하면 같은 배치가 계속 재생되고,
+  Stop 훅이 그것으로 턴을 막는다.
+- ⚠⚠ **이 문법의 정본은 `orca skills get orchestration` 이다.** 이 파일은 그것을 인용할 뿐
+  다시 쓰지 마라 — 위 결함이 정확히 그렇게 생겼다(정본을 복사해 옮겨 적다가 인자를 잃었다).
 
 ### ⛔⛔ 2026-09-16 개정 — **`check` 가 기본이다. `worker-list` 폴링으로 대신하지 마라**
 
@@ -477,17 +539,20 @@ orca orchestration check --wait --types worker_done,escalation,question \
 ```bash
 # 기다려도 될 때(기본) — 메시지가 오면 즉시 깨어난다
 orca orchestration check --wait --types worker_done,escalation,question \
-  --timeout-ms 900000 --ack --json
+  --timeout-ms 900000 --json
 
 # 그 사이 자기 단계를 진행해야 할 때 — 같은 명령을 **wait 없이** 주기적으로
-orca orchestration check --ack --json
+orca orchestration check --json
+
+# 앞 배치를 처리했으면 그 delivery_id 로 ack 하면서 다음을 받는다(값을 빠뜨리면 명령이 거부된다)
+orca orchestration check --ack <delivery_id> --json
 ```
 
 - **비블로킹이 필요해도 `check` 를 써라.** `--wait` 만 빼면 된다. 바꿀 것은 명령이 아니라 대기다.
 - `worker-list` 는 **상태 보조**다(누가 도는가·핸들은 무엇인가). 메시지 확인 수단이 아니다.
 - `inbox` 는 **읽지 않고 들여다보는** 자리다. 세어 보는 데는 쓰되, 그것으로 「확인했다」고 하지 마라.
 - Stop 훅 `coordinator-inbox-gate.sh` 가 안 읽은 완료 보고·에스컬레이션·미답 질문으로 턴 종료를
-  막는다. 그 문구가 가리키는 해법도 `check --ack` 다.
+  막는다. 그 문구가 가리키는 해법도 `check --ack <delivery_id>` 다.
 
 ⚠⚠ **없는 명령을 부르면 CLI 가 usage 를 내는데, 그 출력을 JSON 으로 파싱하면 「0건」이 된다.**
 2026-09-15 에 `message-list`(없는 명령)를 불러 「질문이 안 온다」로 **오진**했고 문서에 도구
@@ -527,7 +592,7 @@ bash "$GF/hooks/coordinator-inbox-gate.test.sh" # 마지막 줄이 「실패 0�
 `check` 폴링 규약(§4)이 함께 있어야 한다. 둘 중 하나만으로는 닫히지 않는다.
 - ⚠ `check --wait --json` 은 stdout 에 JSON 하나, stderr 에 keepalive 를 낸다.
   **스트림을 합쳐 파서에 넣지 마라**(`2>&1 | jq` 는 깨진다).
-- **Delivery 안의 메시지를 전부 처리한 뒤에** `--ack` 해라.
+- **Delivery 안의 메시지를 전부 처리한 뒤에** `--ack <delivery_id>` 해라(값을 빠뜨리지 마라).
 
 ### ⚠⚠ 메시지는 워커가 `check` 할 때만 도착한다 — 규약은 **프리앰블에** 넣어라
 

@@ -15,6 +15,7 @@
    그 상태에서 coder.sh 는 codex 를 부르지도 않는다.
 """
 import hashlib
+import re
 import io
 import json
 import os
@@ -51,19 +52,36 @@ def resolve_config_path(argv, here):
     return os.path.join(here, DEFAULT_NAME), "플러그인 기본"
 
 
+# ⭐⭐ 체크박스의 **상태**는 지문에서 뺀다 — 그 자리가 진행을 기록하는 자리이기 때문이다.
+#   go-tester 의 같은 함수와 규칙이 같아야 한다(두 지문이 갈리면 한쪽만 다시 묻는다).
+_CHECKBOX = re.compile(r"^(\s*[-*]\s*)\[[^\]]\](\s)", re.M)
+
+
 def plan_fingerprint(plan_file):
-    """계획 파일 **내용**의 해시. 경로가 아니라 내용에 묶는 이유는 그 경로가 상수이기 때문이다.
+    """계획 파일 **범위**의 해시. 진행 상태(체크박스)는 빼고 잰다.
 
     ⚠ 첫 판은 경로로 묶었는데 모든 계획이 같은 경로를 공유해서, 앞 계획의 기록이 남으면
       묻지 않고 켜졌다. 내용 해시면 계획이 바뀌는 순간 무효가 된다.
+
+    ⛔⛔ 그런데 파일 전체를 해시하면 체크박스 하나를 닫는 것만으로 무효가 된다
+      (`optin_stale`). 계획을 진행하면 반드시 일어나는 일이라 위임이 사실상 첫 항목에서만
+      켜진다. 이 장치가 묻는 것은 「승인받은 **범위**가 달라졌나」이고, 체크박스를 닫는
+      것은 범위 변경이 아니라 진행이다.
     """
     if not plan_file or not os.path.exists(plan_file):
         return ""
     try:
         with open(plan_file, "rb") as f:
-            return hashlib.sha256(f.read()).hexdigest()[:16]
+            raw = f.read()
     except Exception:
         return ""
+    try:
+        text = raw.decode("utf-8")
+    except Exception:
+        # 읽지 못하면 종전대로 바이트를 해시한다 — 모르면 엄격한 쪽으로 닫는다.
+        return hashlib.sha256(raw).hexdigest()[:16]
+    norm = _CHECKBOX.sub(r"\1[ ]\2", text)
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
 
 
 def optin_state(project_root, plan_file):

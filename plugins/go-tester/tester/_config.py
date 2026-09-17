@@ -13,6 +13,7 @@
 """
 import hashlib
 import io
+import re
 import json
 import os
 import shlex
@@ -64,19 +65,38 @@ def merged(argv):
     return base, path, origin
 
 
+# ⭐⭐ 체크박스의 **상태**는 지문에서 뺀다 — 그 자리가 진행을 기록하는 자리이기 때문이다.
+#   `- [x]` · `- [~]` 처럼 대괄호 안이 무엇이든 `- [ ]` 로 통일하고 해시한다. 항목의 글은
+#   그대로 두므로 항목이 늘거나 줄거나 문구가 바뀌면 지문도 바뀐다.
+_CHECKBOX = re.compile(r"^(\s*[-*]\s*)\[[^\]]\](\s)", re.M)
+
+
 def plan_fingerprint(plan_file):
-    """계획을 식별하는 값 — **내용 해시**다.
+    """계획을 식별하는 값 — **범위의 해시**다(진행 상태는 뺀다).
 
     ⛔ 종전에는 계획 파일의 **경로**로 묶었는데, 그 경로는 모든 계획이 공유하는 상수
       (`.claude/plan-active.md`)다. 그래서 앞 계획의 옵트인이 남아 있으면 다음 계획이
       묻지도 않고 켜졌다 — 「기본은 안 씀 · 계획마다 묻는다」가 거짓이 되는 자리였고,
       리뷰가 지목했다. 자원 회수(C3)의 삭제 절차에만 기대던 것을 값으로 바꾼다.
+
+    ⛔⛔ 그 다음 판은 **파일 전체 바이트**를 해시했는데, 그러면 체크박스 하나를 닫는
+      것만으로 옵트인이 무효가 된다(`optin_stale`). 계획을 진행하면 반드시 일어나는
+      일이라 위임이 사실상 첫 항목에서만 켜졌다 — 2026-09-17 실측에서 rc 70 의 사유가
+      그것이었다. 이 장치가 묻는 것은 「승인받은 **범위**가 달라졌나」이고, 체크박스를
+      닫는 것은 범위 변경이 아니라 진행이다. ⇒ 상태를 정규화한 뒤 해시한다.
     """
     try:
         with io.open(plan_file, "rb") as f:
-            return hashlib.sha256(f.read()).hexdigest()[:16]
+            raw = f.read()
     except Exception:
         return ""
+    try:
+        text = raw.decode("utf-8")
+    except Exception:
+        # 읽지 못하면 종전대로 바이트를 해시한다 — 모르면 엄격한 쪽으로 닫는다.
+        return hashlib.sha256(raw).hexdigest()[:16]
+    norm = _CHECKBOX.sub(r"\1[ ]\2", text)
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
 
 
 def optin_state(cfg, project_root, plan_file):

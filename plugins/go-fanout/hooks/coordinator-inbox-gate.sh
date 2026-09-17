@@ -390,9 +390,9 @@ axis_block() { # <축> <제목> <해법>
   axis_block question   "워커가 답을 기다린다(멈춰 있다)" \
     "bash $PLUGIN_ROOT/scripts/coordinator-send.sh --reply <msg_id> --body \"<답>\""
   axis_block worker_done "끝난 워커의 완료 보고를 안 읽었다" \
-    "orca orchestration check --json 으로 받아 전부 처리한 뒤 --ack 를 붙여 배치를 닫아라(ack 전에는 같은 배치가 반복된다). 그 다음 자원 회수(release)나 재사용을 정해라"
+    "orca orchestration check --json 으로 받아 전부 처리한 뒤 --ack <delivery_id> 로 배치를 닫아라(⛔ 값을 빼면 CLI 가 명령 전체를 거부한다 · ack 전에는 같은 배치가 반복된다). 그 다음 자원 회수(release)나 재사용을 정해라"
   axis_block escalation  "워커가 문제를 알렸는데 안 읽었다" \
-    "orca orchestration check --json 으로 읽고 조치한 뒤 --ack 로 닫아라"
+    "orca orchestration check --json 으로 읽고 조치한 뒤 --ack <delivery_id> 로 닫아라(값을 빼면 거부된다)"
   echo "⚠ 읽음 표시를 바꾸는 것은 check 다(--peek·--all 은 바꾸지 않는다). inbox 는 몇 번을 봐도 read 가 0 이다."
   if [ "$HBS" -gt 0 ]; then
     echo

@@ -163,8 +163,17 @@ rc=$( ( export PATH="$T/bin:$PATH" HOME="$T/home" CLAUDE_PROJECT_DIR="$T/repo" \
         bash "$CODER" --task "$T/task.md" --targets 'target.txt' \
              --gate 'bash gate.sh' --cwd "$T/repo" --out "$T/out.json"
       ) >"$T/log" 2>&1; printf '%s' $? )
-[ "$rc" = "68" ] && ok "⑦ 자식이 계획 파일을 고치면 rc 68" || ng "rc 68 미발화" "rc=$rc $(cat "$T/log")"
-grep -q 'P1 남은 것' "$T/repo/.claude/plan-active.md" && ok "⑦-b 계획 파일이 복원됐다" || ng "미복원" "$(cat "$T/repo/.claude/plan-active.md")"
+[ "$rc" = "68" ] && ok "⑦ 계획 파일이 자식이 도는 동안 바뀌면 rc 68" || ng "rc 68 미발화" "rc=$rc $(cat "$T/log")"
+# ⭐⭐ 2026-09-17 개정 — **되돌리지 않는다**(사용자 결정). 이 검사는 종전에 「복원됐나」를
+#   봤는데, 그 복원이 실제로는 부모의 작업을 지우고 있었다(실측 발화 건이 전부 부모였다).
+#   ⇒ 축이 셋으로 늘었다: ①rc 68 이 난다 ②지금 내용이 **그대로 있다** ③시작 시점 사본이
+#     계획 파일 옆에 남는다. ②만 보면 「아무것도 안 하는」 구현이 통과하므로 ③이 함께 있다.
+grep -q 'P1 남은 것' "$T/repo/.claude/plan-active.md" \
+  && ng "되돌렸다" "$(cat "$T/repo/.claude/plan-active.md")" \
+  || ok "⑦-b ⭐⭐ 되돌리지 않았다 — 지금 내용이 그대로 있다"
+ls "$T/repo/.claude/plan-active.md".pre-* >/dev/null 2>&1 \
+  && ok "⑦-c 시작 시점 사본이 계획 파일 옆에 남았다(되찾을 수 있다)" \
+  || ng "사본 없음" "$(ls "$T/repo/.claude/" 2>&1)"
 cleanup
 
 echo "=== 자식 출력 — 판정에 쓰지 않는다"

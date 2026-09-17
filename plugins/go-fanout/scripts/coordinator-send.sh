@@ -31,7 +31,7 @@
 
 set -uo pipefail
 ORCA_BIN="${ORCA_BIN:-orca}"
-NUDGE_TEXT="${CLAUDE_FANOUT_NUDGE_TEXT:-코디네이터 메시지가 왔다. orca orchestration check --ack --json 을 불러라.}"
+NUDGE_TEXT="${CLAUDE_FANOUT_NUDGE_TEXT:-코디네이터 메시지가 왔다. orca orchestration check --json 을 불러라(앞 배치를 처리했으면 --ack <delivery_id> 를 붙여라).}"
 # ⭐ 실측 경계 — `reply` 는 이 초 안이면 ask 반환으로 닿는다(57/57). 넘으면 워커가 이미
 #   빠져나와 있어 inbox 에만 쌓인다(4 중 1 미읽음) ⇒ 그때는 깨우기가 필수다.
 REPLY_FRESH_SEC="${CLAUDE_FANOUT_REPLY_FRESH_SEC:-600}"

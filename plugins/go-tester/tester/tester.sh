@@ -26,7 +26,7 @@
 #   65  산출이 무효(JSON 이 아니거나 스키마 불충족)
 #   66  테스트 파일 밖을 고쳤다 · 또는 쓰기 범위를 **검사하지 못했다**
 #   67  대조군 누락(테스트 파일이 바뀌었는데 발화한 대조군이 0건)
-#   68  부모 계획·리뷰 파일이 훼손됐다(원본을 복원했다)
+#   68  자식이 도는 동안 부모 계획·리뷰 파일이 바뀌었다(⭐ 되돌리지 않는다 · 시작 시점 사본을 옆에 남긴다)
 #   70  쓸 수 없다 — 꺼졌거나·옵트인 없음·heartbeat 불가·슬롯 대기 초과·**업스트림 거부**
 #       (⭐ heartbeat 는 통과했는데 본 작업이 403/401/429 로 막히는 경우가 실재한다)
 set -u
@@ -162,23 +162,33 @@ changed() { # changed <파일> <이름> → 0=바뀌었다
   [ -f "$1" ] || return 0
   [ "$(shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1)" != "$(cat "$GUARD_DIR/$2.sha")" ]
 }
-# ⭐⭐ 복원은 **덮어쓰기**다 — 되돌리기 전에 지금 내용을 반드시 남겨라 (2026-09-15 실측).
-#   첫 실사용에서 이 경로가 발화했는데 원인이 자식이 아니라 **부모**였다: 부모 세션이
-#   자식이 도는 동안 계획 파일을 파킹(`mv`)했고, 가드가 그것을 훼손으로 읽어 되돌렸다.
-#   그때 부모의 변경이 아무 사본도 없이 사라진다 — 가드가 지키려던 것을 가드가 삼킨다.
-#   ⇒ 되돌리기 전에 `<이름>.at-exit` 로 보존하고, 그 경로를 사유에 실어 되찾을 수 있게 한다.
-restore_one() { # restore_one <파일> <이름> → 바뀌었으면 보존·복원하고 0
+# ⛔⛔ **되돌리지 않는다**(2026-09-17 사용자 결정). 종전에는 시작 시점 사본으로 덮어썼다.
+#   그 설계의 전제는 「바뀌었다면 자식이 고친 것」인데, 이 도구는 자식과 부모를 **가르지
+#   못한다**(아래 ⑧의 주석이 스스로 그렇게 적는다). 그리고 자식은 `CLAUDE_PLAN_FILE` 이
+#   임시 경로로 덮여 있고 `--setting-sources ""` 로 훅도 막혀 있어 부모 계획을 고칠 동기가
+#   구조적으로 없다. 실측이 그것을 뒷받침한다 — 2026-09-15 첫 발화도, 2026-09-17 의 두 건도
+#   **전부 부모**였다(워커 워크트리에서는 0건). 즉 되돌림은 거의 언제나 부모의 작업을 지운다.
+#
+#   ⇒ 바뀐 것을 **감지해서 rc 68 로 알리되 파일은 그대로 둔다.** 대신 시작 시점 사본을
+#     계획 파일 **옆에** 남긴다(GUARD_DIR 은 종료 시 지워지므로 거기 두면 되찾을 수 없다).
+#     자식이 고친 것으로 의심되면 사람이 그 사본으로 되돌린다 — 판단을 사람에게 준다.
+preserve_one() { # preserve_one <파일> <이름> → 바뀌었으면 사본을 남기고 0. 원본은 건드리지 않는다.
   changed "$1" "$2" || return 1
-  [ -f "$1" ] && cp "$1" "$GUARD_DIR/$2.at-exit" 2>/dev/null
-  cp "$GUARD_DIR/$2.bak" "$1"
+  [ -f "$GUARD_DIR/$2.bak" ] || return 0
+  local keep="$1.pre-$LABEL"
+  cp "$GUARD_DIR/$2.bak" "$keep" 2>/dev/null
+  printf '%s' "$keep" >> "$GUARD_DIR/preserved.list"
+  printf '\n' >> "$GUARD_DIR/preserved.list"
+  return 0
 }
-restore_parents() {
-  # ⭐ 신호로 죽을 때도 **복원이 먼저**다(리뷰 g10). 종전 트랩은 백업이 든 GUARD_DIR 을
-  #   지우고 끝나서, INT·TERM 경로에서는 자식이 고친 계획 파일이 그대로 남았다.
-  local restored=""
-  if restore_one "$PLAN_F"   plan;   then restored="$restored plan-active.md"; fi
-  if restore_one "$REVIEW_F" review; then restored="$restored review-active.md"; fi
-  printf '%s' "$restored"
+detect_parents() {
+  # ⭐ 신호로 죽을 때도 이 검사가 먼저다. 종전 트랩은 백업이 든 GUARD_DIR 을 지우고
+  #   끝나서, INT·TERM 경로에서는 시작 시점 사본이 사라졌다.
+  local touched=""
+  : > "$GUARD_DIR/preserved.list" 2>/dev/null
+  if preserve_one "$PLAN_F"   plan;   then touched="$touched plan-active.md"; fi
+  if preserve_one "$REVIEW_F" review; then touched="$touched review-active.md"; fi
+  printf '%s' "$touched"
 }
 snap "$PLAN_F" plan
 snap "$REVIEW_F" review
@@ -280,9 +290,9 @@ release_all() {
   [ "${KEEP_GUARD:-0}" = "1" ] || rm -rf "$GUARD_DIR" 2>/dev/null
 }
 on_signal() {
-  r="$(restore_parents)"
-  [ -n "$r" ] && echo "tester.sh: 신호로 중단 — 부모 파일 복원:$r" >&2
-  ledger_append 143 "interrupted${r:+ · 복원:$r}"
+  r="$(detect_parents)"
+  [ -n "$r" ] && echo "tester.sh: 신호로 중단 — 부모 파일이 바뀌었다(되돌리지 않았다):$r" >&2
+  ledger_append 143 "interrupted${r:+ · 부모파일변경:$r}"
   release_all
   exit 143
 }
@@ -380,7 +390,7 @@ t1=$(python3 -c 'import time;print(time.time())')
 ELAPSED=$(python3 -c "print(round($t1-$t0,1))")
 
 # ── ⑧ 부모 파일 훼손 검사 (다른 판정보다 앞선다) ────────────────────────────
-RESTORED="$(restore_parents)"
+RESTORED="$(detect_parents)"
 if [ -n "$RESTORED" ]; then
   # ⛔ **어느 쪽이 고쳤는지 이 도구는 가르지 못한다.** 2026-09-15 첫 실사용에서 이 경로가
   #   발화했고 원인은 자식이 아니라 부모였다(부모가 계획을 파킹했다). 종전 문구는
@@ -388,8 +398,11 @@ if [ -n "$RESTORED" ]; then
   #   나쁘다 — 사람을 반대 방향으로 보낸다. ⇒ 관측된 것만 말하고 판단 재료를 함께 준다.
   #   ⚠ 자식은 `CLAUDE_PLAN_FILE` 이 임시 경로로 덮여 있고 `--setting-sources ""` 로 훅도
   #     막혀 있다(⑦). 즉 자식이 부모 계획을 고칠 동기가 구조적으로 없다 — 부모를 먼저 의심하라.
-  WHY68="parent_files_modified:$RESTORED (되돌리기 전 내용을 <이름>.at-exit 로 남겼다"
-  WHY68="$WHY68 · 부모가 고친 것이면 그 파일로 되찾아라 · 자식·부모 어느 쪽인지는 가르지 못한다)"
+  KEPT="$(tr '\n' ' ' < "$GUARD_DIR/preserved.list" 2>/dev/null)"
+  WHY68="parent_files_modified:$RESTORED (⭐ **되돌리지 않았다** — 지금 내용이 그대로 있다"
+  WHY68="$WHY68 · 시작 시점 사본: ${KEPT:-없음}"
+  WHY68="$WHY68 · 자식·부모 어느 쪽이 고쳤는지는 가르지 못한다. 자식은 계획 경로가 임시로"
+  WHY68="$WHY68 덮여 있고 훅도 막혀 있어 고칠 동기가 없으니 **부모를 먼저 의심하라**)"
   if [ -s "$REPORT_FILE" ]; then
     SUM68="$(python3 - "$REPORT_FILE" <<'PYSUM' 2>/dev/null
 import io, json, sys

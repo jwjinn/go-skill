@@ -53,7 +53,12 @@ eq "orchestration send 1회" "$(count 'orchestration send')" 1
 eq "terminal send 1회"      "$(count 'terminal send')" 1
 grep -q 'terminal send --terminal term_w1' "$SB/argv" && ok "worker-show 가 준 핸들로 깨운다" || bad "핸들이 다르다"
 grep -q -- '--enter' "$SB/argv" && ok "Enter 를 붙인다(안 붙이면 줄이 프롬프트에 남는다)" || bad "--enter 가 없다"
-grep -q 'check --ack' "$SB/argv" && ok "깨우기 문구가 check --ack 를 말한다" || bad "문구가 틀리다"
+# ⛔ 값 없는 `--ack` 를 말하면 워커가 그대로 쳐서 CLI 가 명령 전체를 거부한다(2026-09-17 실측).
+#   그래서 두 축이다: ①check 를 말한다 ②ack 를 말한다면 값과 함께 말한다.
+grep -q 'orchestration check' "$SB/argv" && ok "깨우기 문구가 check 를 말한다" || bad "문구가 틀리다"
+grep -qE -- '--ack ([^<]|$)' "$SB/argv" \
+  && bad "값 없는 --ack 를 말한다(CLI 가 --ack requires a value 로 거부한다)" \
+  || ok "⭐ 대조군 — 값 없는 --ack 를 말하지 않는다"
 grep -q 'P3 로 가라' "$SB/argv" && ! grep -q 'terminal send.*P3 로 가라' "$SB/argv" \
   && ok "⭐ 본문은 inbox 에만 간다(터미널에 타이핑하지 않는다)" || bad "본문이 터미널로 갔다"
 
