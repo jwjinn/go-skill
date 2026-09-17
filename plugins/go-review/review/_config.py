@@ -128,7 +128,7 @@ def cases_hash(project_root):
     return h.hexdigest()[:16]
 
 
-def gate_local_qualification(seats, project_root):
+def gate_local_qualification(seats, project_root, want_model=""):
     """`local` 자리에 **자격을 통과한 모델만** 앉힌다 (2026-09-17 · fail-closed).
 
     사용자 지시: 「로컬 모델의 경우에는 모델 마다의 성능 차이가 있으니, 이 모델을 리뷰로
@@ -148,8 +148,16 @@ def gate_local_qualification(seats, project_root):
         return seats, None
 
     rec_path = os.path.join(project_root, ".claude", "review", "local-qualified.json")
+
+    # ⭐⭐ **판정의 방향이 이 함수의 본체다.** 「why 가 있으면 닫는다」가 아니라
+    #   **「합격을 확인했을 때만 연다」**로 쓴다. 전자로 쓰면 예상 못 한 입력이 전부 통과한다 —
+    #   2026-09-17 리뷰가 실제로 그 구멍을 잡았다: 기록이 JSON `null` 이면 `json.load` 가
+    #   예외 없이 `None` 을 돌려 「읽었고 문제 없다」로 빠져나갔고(seats 무변경 · note 없음),
+    #   `[]` 면 `rec.get` 이 AttributeError 로 `_config.py` 를 통째로 죽였다.
+    #   ⇒ **열리는 경로를 하나로 좁히고**(`opened = True`), 그 밖은 전부 닫는다.
     why = None
-    rec = None
+    opened = False
+
     if not os.path.exists(rec_path):
         why = "자격 기록이 없다(%s)" % rec_path
     else:
@@ -157,20 +165,36 @@ def gate_local_qualification(seats, project_root):
             rec = json.load(io.open(rec_path, encoding="utf-8"))
         except Exception as e:
             why = "자격 기록을 읽지 못했다(%s) — 모르면 닫는다" % e
-
-    if rec is not None and why is None:
-        if not rec.get("qualified"):
-            why = "자격 미달이다(qualified=false · %s)" % (rec.get("why") or "사유 없음")
         else:
-            now = cases_hash(project_root)
-            if now is None:
-                why = "평가 케이스 파일을 찾지 못해 자격의 유효 범위를 맞출 수 없다"
-            elif rec.get("cases_hash") != now:
-                why = ("자격이 낡았다 — 잰 케이스(%s) ≠ 지금 케이스(%s). 다시 재라"
-                       % (rec.get("cases_hash"), now))
+            if not isinstance(rec, dict):
+                # ⚠ `null`·`[]`·`false`·문자열 — 전부 여기로 온다. 「파싱은 됐다」가
+                #   「형식이 맞다」를 뜻하지 않는다.
+                why = "자격 기록이 객체가 아니다(%s) — 모르면 닫는다" % type(rec).__name__
+            elif not rec.get("qualified"):
+                why = "자격 미달이다(qualified=false · %s)" % (rec.get("why") or "사유 없음")
+            else:
+                now = cases_hash(project_root)
+                if now is None:
+                    why = "평가 케이스 파일을 찾지 못해 자격의 유효 범위를 맞출 수 없다"
+                elif rec.get("cases_hash") != now:
+                    why = ("자격이 낡았다 — 잰 케이스(%s) ≠ 지금 케이스(%s). 다시 재라"
+                           % (rec.get("cases_hash"), now))
+                elif want_model and str(rec.get("model") or "") != want_model:
+                    # ⛔⛔ **자격은 시험지만이 아니라 응시자에도 묶인다**(2026-09-17 리뷰 둘이
+                    #   함께 지적했다). 케이스 해시만 보면 로컬 엔드포인트가 다른(더 약한)
+                    #   모델을 서빙하도록 바뀌어도 자격이 그대로 유효하다 —
+                    #   그것이 사용자 요청(「모델마다 성능 차이가 있으니 기준 이상인지 먼저
+                    #   판단」)이 막으려던 바로 그 상태다.
+                    why = ("잰 모델(%s) ≠ 지금 쓸 모델(%s) — 그 모델은 재지 않았다"
+                           % (rec.get("model") or "(기록 없음)", want_model))
+                else:
+                    opened = True
 
-    if why is None:
+    if opened:
         return seats, None
+    if why is None:
+        # ⚠ 여기 오면 위 분기가 새는 것이다. 열지 말고 그렇게 말한다(대조군이 이것도 잠근다).
+        why = "자격을 확인하지 못했다(판정 분기가 값을 남기지 않았다) — 모르면 닫는다"
 
     changed = [k for k, v in seats.items() if v == "local"]
     seats = dict((k, ("none" if v == "local" else v)) for k, v in seats.items())
@@ -200,7 +224,10 @@ def main():
         preset, seats, demote_note = demote_without_codex(preset, seats)
     # ⭐ 로컬 모델 자격도 **구성 해석의 일부**다 — 같은 이유로 여기 둔다(지시문 규율이 아니다).
     proj_root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    seats, local_note = gate_local_qualification(seats, proj_root)
+    # ⭐ 어느 로컬 모델을 쓸지는 구성이 정한다(`models.local`). 비어 있으면 모델 대조를
+    #   건너뛰되, 그 사실이 출력에 남는다 — 「모르는 것을 근거로 열지 않는다」의 약한 판이다.
+    ml = ((cfg.get("models") or {}).get("local") or "").strip()
+    seats, local_note = gate_local_qualification(seats, proj_root, ml)
     models = cfg.get("models") or {}
     mc = (models.get("claude") or "").strip()
     mx = (models.get("codex") or "").strip()
@@ -225,10 +252,14 @@ def main():
             print("  %-9s —          (이 자리는 비운다)" % seat)
             continue
         name, gets, asks = SEAT_INFO[seat]
-        out = "%s-%s" % (who, name) if who == "codex" and seat != "cross" else \
-              ("codex" if who == "codex" else "claude-%s" % name)
+        # ⛔⛔ **주체를 이름에 남겨라**(2026-09-17 리뷰가 잡았다). 종전 식은 `codex` 만 분기해서
+        #   `local` 이 `else` 로 떨어져 **`claude-blind` 로 표기**됐다. 그 이름으로 산출이
+        #   저장되고 `CLAUDE_REVIEW_REVIEWERS` 에 실리므로, 로컬 모델의 발견이 원장에서
+        #   **claude-blind 의 것으로 귀속**된다 — 로컬 성능을 재려고 만든 경로가 그 지점에서
+        #   자기 측정을 오염시킨다. 「위조 가능한 값을 근거로 쓰지 마라」의 내부 판이다.
+        out = "codex" if (who == "codex" and seat == "cross") else "%s-%s" % (who, name)
         active.append((seat, who, out))
-        model = mx if who == "codex" else mc
+        model = mx if who == "codex" else (ml if who == "local" else mc)
         print("  %-9s %-7s → $ROUND/%-18s %s" % (seat, who, out + ".json", gets))
         print("            %s%s" % (asks, ("  · 모델 %s" % model) if model else ""))
     merger = seats.get("merger", "claude")

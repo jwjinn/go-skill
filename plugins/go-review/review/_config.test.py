@@ -177,16 +177,72 @@ try:
 finally:
     shutil.rmtree(root, ignore_errors=True)
 
-# ── ⑧ ⭐ 대조군 — 게이트를 안 부르면 ①이 성립하지 않는다 ───────────────────
-#    「이 테스트가 무엇을 지키나」를 증명하는 자리다. 게이트를 건너뛰면 기록이 없는데도
-#    자리가 local 로 남고, 그 상태를 ①이 잡아야 한다.
+# ── ⑧ ⭐⭐ 대조군 — **`main()` 이 게이트를 실제로 부르는가** ─────────────────────
+#
+# ⚠⚠ 첫 판의 ⑧은 **항진명제**였다. 바로 위에서 리터럴로 만든 dict 의 값을 확인하는 것이라
+#    피검 코드가 관여하지 않았고, `main()` 의 게이트 호출 한 줄을 지워도 8축 전부 초록이었다
+#    (2026-09-17 리뷰가 잡았고 실제로 사보타주해서 재현했다 — rc 0).
+#    ⭐ 머리말이 「그러지 않으면 이 테스트는 근거가 아니라 장식이다」라고 적은 그 상태였다.
+#    ⇒ 이제 **`main()` 을 실제로 돌려** 배선을 잰다. 게이트 호출을 지우면 이 축이 붉어진다.
+print("=== ⑧ 대조군 — main() 이 게이트를 부르는가 ===")
 root, cpath = make_project()
 try:
-    seats_ungated = {"blind": "local"}          # 게이트를 부르지 않은 상태
-    chk("⑧ 대조군: 게이트 없이는 local 이 그대로 남는다(①이 잡을 대상)",
-        seats_ungated.get("blind"), "local")
-    seats_gated, _ = run_gate(root, seats_ungated)
-    chk("⑧ 대조군: 게이트를 부르면 달라진다", seats_gated.get("blind") != seats_ungated.get("blind"), True)
+    rv = os.path.join(root, ".claude", "review")
+    io.open(os.path.join(rv, "config.json"), "w", encoding="utf-8").write(
+        '{"preset":"custom","seats":{"contract":"claude","blind":"local","cross":"none","merger":"claude"}}')
+    # 자격 기록은 **없다** — main() 이 게이트를 부르면 blind 자리가 비어야 한다.
+    import subprocess
+    env = dict(os.environ)
+    env["CLAUDE_PROJECT_DIR"] = root
+    out = subprocess.run([sys.executable, os.path.join(SELF, "_config.py"),
+                          os.path.join(rv, "config.json")],
+                         capture_output=True, text=True, env=env).stdout
+    chk("⑧ main() 출력에 게이트 사유가 있다", "로컬 모델 자리를 비웠다" in out, True)
+    chk("⑧ blind 자리가 비어 있다고 표기된다", "blind" in out and "이 자리는 비운다" in out, True)
+    chk("⑧ REVIEWERS 에 local 이 실리지 않는다", "local-blind" not in out, True)
+finally:
+    shutil.rmtree(root, ignore_errors=True)
+
+print()
+
+# ── ⑨ ⭐⭐ 비-dict 기록은 전부 닫는다 (2026-09-17 리뷰가 잡은 자리) ─────────────
+#
+# ⚠⚠ 첫 판이 fail-closed 가 **아니었다.** 기록이 JSON `null` 이면 `json.load` 가 예외 없이
+#    `None` 을 돌려 「읽었고 문제 없다」로 빠져나갔고(자리 유지 · 사유 없음), `[]` 면
+#    `rec.get` 이 AttributeError 로 `_config.py` 를 통째로 죽였다.
+#    ⭐ 원인은 **판정의 방향**이었다 — 「why 가 있으면 닫는다」로 쓰면 예상 못 한 입력이 전부
+#    통과한다. 지금은 「합격을 확인했을 때만 연다」로 뒤집었고, 이 축이 그것을 잠근다.
+print("=== ⑨ 비-dict 기록 (null · [] · false · 문자열) ===")
+for raw, label in [("null", "null"), ("[]", "빈 배열"), ("false", "false"), ('"ok"', "문자열")]:
+    root, cpath = make_project(raw_record=raw)
+    try:
+        seats, note = run_gate(root, {"blind": "local"})
+        chk("⑨ %s 기록 → none" % label, seats.get("blind"), "none")
+        chk_truthy("⑨ %s 사유가 있다" % label, note)
+    except Exception as e:
+        chk("⑨ %s 기록 → 예외 없이 판정해야 한다" % label, "예외:%s" % type(e).__name__, "none")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+# ── ⑩ ⭐⭐ 자격은 **응시자(모델)** 에도 묶인다 (2026-09-17 리뷰 둘이 함께 지적) ───
+#
+# ⚠⚠ 첫 판은 케이스 해시만 봤다 — 로컬 엔드포인트가 다른(더 약한) 모델을 서빙하도록 바뀌어도
+#    자격이 그대로 유효했다. 그것이 사용자 요청(「모델마다 성능 차이가 있으니 기준 이상인지
+#    먼저 판단」)이 막으려던 바로 그 상태다. 시험지가 같아도 **응시자가 다르면 다시 재야 한다.**
+print("=== ⑩ 잰 모델 ≠ 쓸 모델이면 닫는다 ===")
+root, cpath = make_project()
+try:
+    rec = record(root, cpath, qualified=True, model="qwen3-coder-next")
+    json.dump(rec, io.open(os.path.join(root, ".claude", "review", "local-qualified.json"), "w",
+                           encoding="utf-8"), ensure_ascii=False)
+    seats, note = _config.gate_local_qualification({"blind": "local"}, root, "qwen3-coder-next")
+    chk("⑩ 같은 모델이면 자리가 남는다", seats.get("blind"), "local")
+    seats, note = _config.gate_local_qualification({"blind": "local"}, root, "다른-모델-3b")
+    chk("⑩ 다른 모델이면 none", seats.get("blind"), "none")
+    chk_truthy("⑩ 사유에 두 모델이 다 나온다", note and "qwen3-coder-next" in note and "다른-모델-3b" in note)
+    # ⚠ 구성이 비어 있으면(모델을 모르면) 대조를 건너뛴다 — 그 사실을 이 축이 고정한다.
+    seats, note = _config.gate_local_qualification({"blind": "local"}, root, "")
+    chk("⑩ 쓸 모델을 모르면 대조하지 않는다(다른 축은 그대로)", seats.get("blind"), "local")
 finally:
     shutil.rmtree(root, ignore_errors=True)
 

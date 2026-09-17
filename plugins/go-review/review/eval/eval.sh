@@ -145,7 +145,11 @@ PY
       if claude -p "$(cat "$p")" ${MODEL:+--model "$MODEL"} \
            --output-format json --json-schema "$SCHEMA_JSON" \
            < /dev/null > "$RAW" 2> "$OUT/$id.err"; then
-        # 스키마를 만족하는 JSON 일 때만 `<id>.json` 으로 승격한다.
+        # ⚠ **여기서 보는 것은 「JSON 으로 파싱되고 `findings` 키가 있나」뿐이다**
+        #   (2026-09-17 리뷰 지적). 스키마 전체(required 필드)를 검증하지는 않는다 —
+        #   그러면 형식이 조금 어긋난 산출까지 버려 미측정이 늘고, 그것은 「재지 못했다」가
+        #   아니라 「우리가 버렸다」다. ⇒ **최소 골격만** 보고 승격한다.
+        #   ⛔ 그러니 채점기의 수치를 인용할 때 「스키마를 통과한 산출」이라 말하지 마라.
         if python3 - "$RAW" "$OUT/$id.json" <<'PY'
 import io, json, sys
 raw, out = sys.argv[1], sys.argv[2]
