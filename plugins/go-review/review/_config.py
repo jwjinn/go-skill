@@ -101,6 +101,90 @@ def demote_without_codex(preset, seats):
     return "P1", down, note
 
 
+def cases_hash(project_root):
+    """이 프로젝트의 평가 케이스 파일들의 **내용 해시**.
+
+    ⭐ 왜 내용 해시인가: `mtime` 으로 낡음을 판정하면 **체크아웃만 해도** 「낡았다」가 뜬다.
+      자격이 낡았다는 것은 「무엇으로 쟀는지가 바뀌었다」는 뜻이고, 그것은 파일의 **내용**이다.
+
+    ⚠ 케이스 파일이 하나도 없으면 `None` 을 돌린다 — 그때는 해시를 맞출 수 없으므로
+      자격을 인정하지 않는다(모르면 닫는다).
+    """
+    import glob
+    import hashlib
+    pats = [os.path.join(project_root, ".claude", "review", "eval", "cases", "*.jsonl"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval", "cases", "*.jsonl")]
+    files = []
+    for p in pats:
+        files += sorted(glob.glob(p))
+    if not files:
+        return None
+    h = hashlib.sha256()
+    for f in files:
+        try:
+            h.update(io.open(f, "rb").read())
+        except Exception:
+            return None
+    return h.hexdigest()[:16]
+
+
+def gate_local_qualification(seats, project_root):
+    """`local` 자리에 **자격을 통과한 모델만** 앉힌다 (2026-09-17 · fail-closed).
+
+    사용자 지시: 「로컬 모델의 경우에는 모델 마다의 성능 차이가 있으니, 이 모델을 리뷰로
+    사용하기 전에 **특정 기준 이상인지를 먼저 선행해서 판단을 하는 프로세스**가 있어야」.
+
+    ⛔ **왜 스크립트인가.** 이것을 지시문의 규율로 두면 빠뜨렸을 때 아무도 모른다 —
+      codex 부재 폴백이 정확히 그 이유로 `review-loop.md` 에서 여기로 옮겨 왔다
+      (`demote_without_codex` 주석 참조). 자격 게이트는 같은 부류의 자리다.
+
+    ⭐ **닫는 쪽이 기본이다.** 기록이 없거나·미달이거나·낡았거나·읽을 수 없으면 그 자리를
+      `none` 으로 바꾼다. 「리뷰어가 있는데 아무것도 못 잡는 상태」는 리뷰가 없는 것보다
+      나쁘다 — 있다고 믿기 때문이다.
+
+    반환: (seats, note) — note 는 바꾼 것이 없으면 `None`.
+    """
+    if not any(v == "local" for v in seats.values()):
+        return seats, None
+
+    rec_path = os.path.join(project_root, ".claude", "review", "local-qualified.json")
+    why = None
+    rec = None
+    if not os.path.exists(rec_path):
+        why = "자격 기록이 없다(%s)" % rec_path
+    else:
+        try:
+            rec = json.load(io.open(rec_path, encoding="utf-8"))
+        except Exception as e:
+            why = "자격 기록을 읽지 못했다(%s) — 모르면 닫는다" % e
+
+    if rec is not None and why is None:
+        if not rec.get("qualified"):
+            why = "자격 미달이다(qualified=false · %s)" % (rec.get("why") or "사유 없음")
+        else:
+            now = cases_hash(project_root)
+            if now is None:
+                why = "평가 케이스 파일을 찾지 못해 자격의 유효 범위를 맞출 수 없다"
+            elif rec.get("cases_hash") != now:
+                why = ("자격이 낡았다 — 잰 케이스(%s) ≠ 지금 케이스(%s). 다시 재라"
+                       % (rec.get("cases_hash"), now))
+
+    if why is None:
+        return seats, None
+
+    changed = [k for k, v in seats.items() if v == "local"]
+    seats = dict((k, ("none" if v == "local" else v)) for k, v in seats.items())
+    note = (
+        "⛔ **로컬 모델 자리를 비웠다**(%s) — %s\n"
+        "   근거: 재지 않은 모델을 리뷰어로 앉히면 「리뷰가 있는데 아무것도 못 잡는 상태」가\n"
+        "   되고, 그것은 리뷰가 없는 것보다 나쁘다(있다고 믿기 때문이다).\n"
+        "   ⭐ 재는 법: `review/eval/` 로 재고 그 결과를 `.claude/review/local-qualified.json`\n"
+        "      에 남겨라(qualified·cases_hash 포함). 낡음 판정은 **케이스 내용 해시**다."
+        % (", ".join(changed), why)
+    )
+    return seats, note
+
+
 def main():
     cfg_path, cfg_src = resolve_config_path(sys.argv)
     cfg = load(cfg_path)
@@ -114,6 +198,9 @@ def main():
     demote_note = None
     if not codex_available():
         preset, seats, demote_note = demote_without_codex(preset, seats)
+    # ⭐ 로컬 모델 자격도 **구성 해석의 일부**다 — 같은 이유로 여기 둔다(지시문 규율이 아니다).
+    proj_root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    seats, local_note = gate_local_qualification(seats, proj_root)
     models = cfg.get("models") or {}
     mc = (models.get("claude") or "").strip()
     mx = (models.get("codex") or "").strip()
@@ -124,6 +211,9 @@ def main():
     if demote_note:
         print()
         print(demote_note)
+    if local_note:
+        print()
+        print(local_note)
     if cfg_src == "플러그인 기본":
         print("  ⭐ 이 프로젝트 전용으로 바꾸려면 `.claude/review/config.json` 에 복사해 고쳐라")
         print("     (플러그인 파일을 고치면 다음 업데이트에 덮인다).")

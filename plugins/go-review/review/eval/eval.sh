@@ -81,6 +81,111 @@ PY
     python3 "$SELF/_prepare.py" "$CASES" "$OUT" "$SELF/../finding-schema.json" "${3:-contract}"
     ;;
 
+  claude)
+    # claude <케이스> <출력> [--endpoint <url> --model <id>] [--role <자리>]
+    #
+    # ⭐ **로컬 모델과 상용 모델(opus 등)을 같은 코드로 부른다.** `--endpoint` 를 주면
+    #   go-tester 의 프록시를 띄우고 `ANTHROPIC_BASE_URL` 을 걸며, 안 주면 기본 엔드포인트로
+    #   간다. 한 서브커맨드로 둘을 재야 **조건이 같아져 비교가 정직해진다.**
+    #
+    # ⚠ 이 파일 머리말의 「Claude 리뷰어는 셸에서 못 부른다」는 **서브에이전트를 전제한
+    #   문장**이다. `claude -p` 경로는 그 전제 밖이고 go-tester 가 이미 그렇게 부른다.
+    #
+    # ⚠⚠ 실패한 케이스는 **산출 JSON 을 남기지 않는다** — 그러면 채점기가 그것을
+    #   「놓침」이 아니라 **「미측정」**으로 센다(`_score.py`). 둘을 섞으면 도달 실패가
+    #   재현율 하락으로 보고돼 모델을 억울하게 깎는다.
+    CASES="${1:-$CASES_DEFAULT}"; shift || true
+    OUT="${1:-$SELF/runs/claude-$(date +%Y%m%d-%H%M%S)}"; shift || true
+    EP=""; MODEL=""; ROLE="blind"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --endpoint) EP="${2:-}"; shift 2 ;;
+        --model)    MODEL="${2:-}"; shift 2 ;;
+        --role)     ROLE="${2:-blind}"; shift 2 ;;
+        *) echo "모르는 인자: $1" >&2; exit 2 ;;
+      esac
+    done
+    command -v claude >/dev/null 2>&1 || { echo "claude 가 없다 — 이 리뷰어는 건너뛴다." >&2; exit 2; }
+    # ⚠ 케이스가 0건이면 **판정 2**(검사 불가)다. 0건을 0% 로 보고하면 「쟀는데 못 찾았다」가
+    #   되는데 실제로는 **재지 않은 것**이다.
+    NCASES=$(grep -c '[^[:space:]]' "$CASES" 2>/dev/null || echo 0)
+    [ "$NCASES" -gt 0 ] || { echo "케이스가 0건이다 — 검사 불가(판정 2)" >&2; exit 2; }
+
+    python3 "$SELF/_prepare.py" "$CASES" "$OUT" "$SELF/../finding-schema.json" "$ROLE" >/dev/null
+    SCHEMA_JSON="$(cat "$SELF/../finding-schema.json")"
+
+    PROXY_STARTED=0
+    if [ -n "$EP" ]; then
+      # go-tester 의 프록시를 **그대로 쓴다** — 두 벌로 만들지 않는다(정본이 둘이면 어긋난다).
+      GT=$(bash "$SELF/../../hooks/_plugins.sh" go-tester tester/_config.py 2>/dev/null) || GT=""
+      if [ -n "$GT" ] && [ -f "$GT/tester/proxy.sh" ]; then
+        PORT="${EVAL_PROXY_PORT:-4142}"; KEY="${EVAL_PROXY_KEY:-sk-eval-local}"
+        if bash "$GT/tester/proxy.sh" start --port "$PORT" --endpoint "$EP" \
+             --model "${MODEL:-local}" --key "$KEY" >/dev/null 2>&1; then
+          PROXY_STARTED=1
+          export ANTHROPIC_BASE_URL="http://127.0.0.1:$PORT"
+          export ANTHROPIC_AUTH_TOKEN="$KEY"
+          export ANTHROPIC_API_KEY=""
+        fi
+      fi
+      # ⭐ 프록시를 못 띄워도 **env 는 세운다** — 그래야 「엔드포인트를 줬는데 기본으로 갔다」가
+      #   조용히 일어나지 않는다. 호출은 실패하고 그 케이스는 미측정으로 남는다.
+      [ "$PROXY_STARTED" = "1" ] || { export ANTHROPIC_BASE_URL="$EP"; export ANTHROPIC_AUTH_TOKEN="${EVAL_PROXY_KEY:-sk-eval-local}"; }
+    fi
+
+    n=0; ok=0
+    for p in "$OUT"/*.prompt.txt; do
+      [ -f "$p" ] || continue
+      id=$(basename "$p" .prompt.txt); n=$((n+1))
+      printf '  %-30s ' "$id"
+      RAW="$OUT/$id.raw"
+      # ⚠ `< /dev/null` 필수 — 없으면 stdin 을 기다리며 멈춘다.
+      # ⚠⚠ `--json-schema` 는 **파일 경로가 아니라 JSON 문자열**을 받는다(실측 2026-09-17:
+      #    경로를 주면 `Unrecognized token '/'` 로 39/39 가 전부 실패했다). 내용을 읽어 넘긴다.
+      if claude -p "$(cat "$p")" ${MODEL:+--model "$MODEL"} \
+           --output-format json --json-schema "$SCHEMA_JSON" \
+           < /dev/null > "$RAW" 2> "$OUT/$id.err"; then
+        # 스키마를 만족하는 JSON 일 때만 `<id>.json` 으로 승격한다.
+        if python3 - "$RAW" "$OUT/$id.json" <<'PY'
+import io, json, sys
+raw, out = sys.argv[1], sys.argv[2]
+try:
+    d = json.load(io.open(raw, encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+# claude --output-format json 은 결과를 감싸기도 한다 — findings 를 찾아 펴 준다.
+if isinstance(d, dict) and "findings" not in d:
+    for k in ("result", "content", "output"):
+        v = d.get(k)
+        if isinstance(v, dict) and "findings" in v:
+            d = v
+            break
+        if isinstance(v, str):
+            try:
+                v2 = json.loads(v)
+            except Exception:
+                continue
+            if isinstance(v2, dict) and "findings" in v2:
+                d = v2
+                break
+if not isinstance(d, dict) or "findings" not in d:
+    raise SystemExit(1)
+json.dump(d, io.open(out, "w", encoding="utf-8"), ensure_ascii=False)
+PY
+        then ok=$((ok+1)); echo "ok"
+        else rm -f "$OUT/$id.json"; echo "스키마 위반(미측정)"; fi
+      else
+        rm -f "$OUT/$id.json"; echo "실패(미측정 · 로그: $OUT/$id.err)"
+      fi
+      rm -f "$RAW"
+    done
+
+    [ "$PROXY_STARTED" = "1" ] && bash "$GT/tester/proxy.sh" stop --port "$PORT" >/dev/null 2>&1
+    echo
+    echo "실행 $ok/$n   (실패는 **미측정**이지 놓침이 아니다)"
+    echo "채점: bash $0 score $CASES $OUT ${MODEL:-claude}"
+    ;;
+
   codex)
     CASES="${1:-$CASES_DEFAULT}"
     OUT="${2:-$SELF/runs/codex-$(date +%Y%m%d-%H%M%S)}"
