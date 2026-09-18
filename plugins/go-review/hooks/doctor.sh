@@ -89,6 +89,20 @@ fi
 # 기본 preset P2 는 **전 자리가 codex** 다 — 없으면 「강등」이 아니라 리뷰가 **아예 없다**.
 if command -v codex >/dev/null 2>&1; then
   pass "codex $(codex --version 2>/dev/null | head -1 | tr -d '\n')"
+  # ⭐ **어느 계정으로 도는가**(2026-09-18). 계정이 바뀌어도 산출물은 똑같아 보이므로
+  #   사람이 알아차릴 신호가 없다 — 세션 시작에 한 번 말해 준다.
+  #   ⚠ 정책이 없으면 조용하다(공용 플러그인이 남의 기기를 막지 않는다).
+  _acct_py="$SELF/../review/_codexacct.py"
+  if [ -f "$_acct_py" ]; then
+    if _acct_out=$(python3 "$_acct_py" 2>&1); then
+      case "$_acct_out" in
+        *"가리지 않는다"*) : ;;   # 정책 없음 — 말할 것이 없다
+        *) pass "$_acct_out" ;;
+      esac
+    else
+      warns "codex 계정이 리뷰 정책에 맞지 않는다 — 그 자리는 claude 로 내려간다. $(printf '%s' "$_acct_out" | head -1)"
+    fi
+  fi
 else
   warns "codex 없음 — preset P2 는 전 자리가 codex 다. 리뷰가 아예 없게 된다(P1 으로 내려라)"
 fi

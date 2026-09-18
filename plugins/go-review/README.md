@@ -73,6 +73,33 @@ bash review/codex-ro.sh --schema review/finding-schema.json -o out.json "<프롬
 래퍼가 읽기 전용 샌드박스와 스키마 강제를 붙인다. `bash review/codex-ro.test.sh` (16종)가
 **이 문서·명령 파일에 맨 `codex exec` 가 남아 있으면 실패**한다 — 우회로를 문서에서 막는다.
 
+### ⭐ 어느 **계정**으로 도는지도 통제한다 (2026-09-18)
+
+한 기기에 codex 계정이 둘 있을 수 있다(개인·회사). 어느 쪽으로 돌든 **리뷰 산출물은
+똑같아 보이므로** 사람이 알아차릴 신호가 없다 — 「막았다」를 주장하려면 구조가 필요하다.
+
+정책을 주면 게이트가 켜지고, **허용을 확인했을 때만** codex 자리가 열린다:
+
+```bash
+export CLAUDE_REVIEW_CODEX_DOMAINS="example.com"     # 기기 단위
+# 또는 .claude/review/config.json 의 "codex_account_domains": ["example.com"]  # 레포 단위
+python3 review/_codexacct.py        # rc 0 허용 · rc 1 거부(사유를 말한다)
+```
+
+| 층 | 무엇을 하나 |
+|---|---|
+| `review/_codexacct.py` | 판정 정본. `CODEX_HOME`(없으면 `~/.codex`)의 `auth.json` 에서 `id_token` 의 `email` 을 읽는다 |
+| `review/_config.py` | codex 자리를 비우고 preset 을 P1 로 내린다(codex 부재와 **같은 폴백 · 다른 사유 문구**) |
+| `review/codex-ro.sh` | 마지막 방어선 — 직접 호출돼도 rc 66 으로 거부하고 codex 를 부르지 않는다 |
+| `hooks/doctor.sh` | 세션 시작에 어느 계정인지 말한다(정책이 없으면 조용하다) |
+
+⚠ **확인하지 못하면 닫는다** — 파일이 없거나·API 키 모드라 계정을 알 수 없거나·토큰을
+파싱하지 못하면 전부 거부다. 「확인하지 못했다」를 통과시키면 게이트가 통째로 없는 것과 같다.
+⚠ 도메인 비교에 `@` 를 포함시킨다. `endswith("example.com")` 만 보면 `evil-example.com` 도
+통과한다(대조군이 그 경로를 잡는다).
+⚠ 정책이 **없으면 가리지 않는다** — 이 플러그인은 공용이라 남의 기기를 막지 않는다.
+끄는 스위치는 `CLAUDE_REVIEW_CODEX_ACCOUNT_GATE=off` 이고, 값이 정확히 `off` 일 때만 꺼진다.
+
 ## 설치
 
 ⚠ **먼저 알아야 할 것**: Claude Code 는 이 저장소의 **로컬 작업 클론을 보지 않는다.**
@@ -353,13 +380,15 @@ bash hooks/doctor.sh --stamp    # 통과했다고 표시한다(세션 시작 진
 
 | 스위트 | 검사 | 스위트 | 검사 |
 |---|---|---|---|
-| `hooks/doctor.test.sh` | 19 | `review/config.test.sh` | 53 |
-| `hooks/go-precheck.test.sh` | 57 | `review/dedup.test.sh` | 24 |
-| `hooks/goal-echo.test.sh` | 32 | `review/measure.test.sh` | 25 |
-| `hooks/plan-file-gate.test.sh` | 55 | `review/scope.test.sh` | 19 |
-| `hooks/review-gate.test.sh` | 26 | `review/verdict.test.sh` | 29 |
+| `hooks/doctor.test.sh` | 22 | `review/config.test.sh` | 61 |
+| `hooks/go-precheck.test.sh` | 95 | `review/dedup.test.sh` | 24 |
+| `hooks/goal-echo.test.sh` | 35 | `review/measure.test.sh` | 25 |
+| `hooks/plan-file-gate.test.sh` | 79 | `review/scope.test.sh` | 19 |
+| `hooks/review-gate.test.sh` | 44 | `review/verdict.test.sh` | 29 |
 | `hooks/todo-completion-gate.test.sh` | 18 | `review/eval/eval.test.sh` | 25 |
-| `review/codex-ro.test.sh` | 16 | `scripts/deps-check.test.sh` | 41 |
+| `review/codex-ro.test.sh` | 16 | `review/eval/claudepath.test.sh` | 8 |
+| `review/codexacct.test.sh` ⭐ | 21 | `review/seats-ask.test.sh` | 6 |
+| `scripts/deps-check.test.sh` | 41 | | |
 
 각 스위트에 **사보타주 대조군**이 있다 — 보호를 지우면 실제로 실패하는지 확인한다.
 대조군 없는 테스트는 근거가 아니다.

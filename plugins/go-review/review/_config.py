@@ -13,6 +13,11 @@ import os
 import shutil
 import sys
 
+# ⚠ 같은 디렉토리의 모듈이다. 이 파일은 스크립트로도(`python3 _config.py`) import 로도
+#   불리므로, 어느 쪽에서든 찾을 수 있게 자기 디렉토리를 경로에 넣는다.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _codexacct  # noqa: E402
+
 PRESETS = {
     # ⭐ P1 은 「Claude 로 되돌리는 자리」다 — P2 가 잘 안 되면 여기로 돌아온다.
     "P1": {"contract": "claude", "blind": "claude", "cross": "codex", "merger": "claude"},
@@ -84,7 +89,7 @@ def codex_available():
     return shutil.which("codex") is not None
 
 
-def demote_without_codex(preset, seats):
+def demote_without_codex(preset, seats, reason=None):
     """⛔ **codex 가 없으면 preset 을 P1 로 내린다** (2026-09-07 사용자 결정).
 
     > 「그냥 **codex가 없으면 리뷰를 claude에게 시킬게.**」
@@ -101,13 +106,24 @@ def demote_without_codex(preset, seats):
     uses_codex = any(v == "codex" for v in seats.values())
     if not uses_codex:
         return preset, seats, None
+    # ⭐ 사유가 둘이다 — 「PATH 에 없다」와 「계정이 허용되지 않는다」. 어느 쪽인지 말하지
+    #   않으면 사람이 PATH 를 뒤지다 못 찾는다("틀린 사유는 없는 것보다 나쁘다").
+    if reason:
+        head = ("⛔ **codex 계정이 허용되지 않아 preset 을 %s → P1 로 내렸다**"
+                "(claude 계약검증·무편향·병합).\n"
+                "   사유: %s\n" % (preset, reason))
+        tail = "   허용 계정으로 `codex login` 하거나 CODEX_HOME 을 그 계정의 홈으로 맞춰라.\n"
+    else:
+        head = ("⛔ **codex 를 찾지 못해 preset 을 %s → P1 로 내렸다**"
+                "(claude 계약검증·무편향·병합).\n" % preset)
+        tail = "   codex 를 설치했는데 이 문구가 보이면 PATH 를 확인하라.\n"
     note = (
-        "⛔ **codex 를 찾지 못해 preset 을 %s → P1 로 내렸다**(claude 계약검증·무편향·병합).\n"
+        head +
         "   근거: codex 자리를 그대로 두면 그 자리는 **아무도 리뷰하지 않는다** — 기본 preset 은\n"
         "   전 자리가 codex 라 최악의 경우 리뷰가 0회가 된다(fail-open).\n"
-        "   ⚠ 교차 모델 검증층이 이 라운드에는 **없다**. 보고에 그 사실을 적어라.\n"
-        "   codex 를 설치했는데 이 문구가 보이면 PATH 를 확인하라." % preset
-    )
+        "   ⚠ 교차 모델 검증층이 이 라운드에는 **없다**. 보고에 그 사실을 적어라.\n" +
+        tail
+    ).rstrip("\n")
     down = dict(PRESETS["P1"])
     # ⛔⛔ **P1 도 교차 자리가 codex 다** — 그것을 그대로 두면 내려놓고도 그 자리는 안 돈다
     #   (내 첫 판이 실제로 그랬다: 출력이 「cross codex」였다). 없는 도구를 가리키는 구성은
@@ -306,6 +322,12 @@ def main():
     demote_note = None
     if not codex_available():
         preset, seats, demote_note = demote_without_codex(preset, seats)
+    else:
+        # ⭐ **계정도 구성 해석의 일부다**(2026-09-18 사용자 지시 — 개인 계정으로 리뷰가
+        #   돌지 않게 한다). 있는 도구를 못 쓰는 사유가 「부재」만은 아니다.
+        ok_acct, acct_why = _codexacct.check(cfg)
+        if not ok_acct:
+            preset, seats, demote_note = demote_without_codex(preset, seats, reason=acct_why)
     # ⭐ diff 크기로 세 번째 자리를 비우는 것도 **구성 해석의 일부**다.
     #   ⚠ 순서가 중요하다 — `demote_without_codex` 가 cross 를 채울 수 있으므로 그 **뒤**에 온다.
     seats, thin_note = thin_third_seat(seats, diff_path)
@@ -385,7 +407,12 @@ def main():
             print("      말할 수 있는 것: 교차 계열이 없다고 사슬이 쓸모없어지지는 않는다.")
             # ⚠ 안내가 **지금 가능한 것**을 말해야 한다 — codex 가 없는데 「codex 를 앉혀라」는
             #   할 수 없는 일을 시키는 것이다(위에서 그 이유로 내려온 경우가 그렇다).
-            if demote_note:
+            if demote_note and "계정이 허용되지 않아" in demote_note:
+                # ⚠ 사유가 계정이면 **계정을 말해야 한다.** 「설치하라」는 틀린 안내이고,
+                #   틀린 사유는 없는 것보다 나쁘다 — 사람을 반대 방향으로 보낸다.
+                print("   ⭐ 이 라운드는 **codex 계정이 허용되지 않아 내려온 구성**이다 —")
+                print("      되돌리려면 허용 계정으로 `codex login` 하거나 CODEX_HOME 을 그 계정의 홈으로 맞춰라.")
+            elif demote_note:
                 print("   ⭐ 이 라운드는 **codex 부재로 내려온 구성**이다 — 되돌리려면 codex 를 설치하라.")
             else:
                 print("   교차 자리에 codex 를 앉히는 것을 고려하라(preset P1).")

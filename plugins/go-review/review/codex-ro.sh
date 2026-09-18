@@ -67,6 +67,20 @@ if [ $# -lt 1 ]; then
 fi
 PROMPT="$1"
 
+# ⛔⛔ **계정 게이트 — 리뷰 경로의 마지막 방어선**(2026-09-18 사용자 지시).
+#   정상 흐름에서는 `_config.py` 가 먼저 codex 자리를 비우므로 여기까지 오지 않는다.
+#   그러나 이 스크립트를 직접 부르는 경로(손으로 부르기·다른 스킬)가 있고, 그 경로에
+#   게이트가 없으면 「막았다」가 거짓이 된다. 통제는 **모든 입구**에 있어야 통제다.
+#   ⚠ 판정 정본은 `_codexacct.py` 하나다 — 여기서 이메일을 다시 파싱하지 마라(정본 둘 금지).
+SELF_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+if [ -f "$SELF_DIR/_codexacct.py" ]; then
+  if ! CLAUDE_PROJECT_DIR="${CWD:-${CLAUDE_PROJECT_DIR:-}}" \
+       python3 "$SELF_DIR/_codexacct.py" >/dev/null; then
+    echo "codex-ro.sh: 위 사유로 **리뷰 호출을 거부한다**(계정 게이트)." >&2
+    exit 66
+  fi
+fi
+
 set -- codex exec
 [ -n "$MODEL" ]    && set -- "$@" -m "$MODEL"
 [ -n "$CWD" ]      && set -- "$@" -C "$CWD"
