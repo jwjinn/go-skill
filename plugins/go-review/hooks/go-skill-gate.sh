@@ -49,6 +49,30 @@ case "$skill" in
 esac
 transcript=$(read_field transcript_path)
 
+# ── Orca 워커 세션이면 통과 (2026-10-05 · go-fanout) ─────────────────────────
+# 워커는 코디네이터가 시드한 초안을 Skill 도구로 `/go` 해 착수한다 — 형식상 「모델의 자가 호출」이다.
+# 그런데 그 초안은 워커 세션이 쓴 것이 아니고(채택 흔적 없음), 워커 세션에는 사람 발화가 없어
+# 요구 추적이 늘 「잴 수 없음」이다. 그대로 두면 fan-out 워커가 **전원** 여기서 멈춘다.
+# 승인과 점검은 이미 코디네이터 세션에서 일어났다(코디네이터 계획이 이 게이트·go-precheck 를 지났다).
+# 판별은 wave-close-gate.sh ④ 와 같다: 이 터미널 핸들이 worker-list 의 워커 핸들인가.
+# ⚠ 핸들만 보지 않는다 — 코디네이터도 Orca 터미널에서 돌고 핸들을 가진다(2026-10-05 실측).
+# ⚠ 판별이 실패하면(orca 없음 · 목록 깨짐 · 핸들 없음) 워커로 보지 않고 아래 점검을 그대로 돈다.
+if [ -n "${ORCA_TERMINAL_HANDLE:-}" ]; then
+  _gsg_orca="${ORCA_BIN:-orca}"
+  if command -v "$_gsg_orca" >/dev/null 2>&1; then
+    if "$_gsg_orca" orchestration worker-list --json 2>/dev/null | ORCA_TERMINAL_HANDLE="$ORCA_TERMINAL_HANDLE" python3 -c '
+import json, os, sys
+try: d = json.load(sys.stdin)
+except Exception: sys.exit(1)
+ws = (d.get("result") or {}).get("workers") or []
+mine = os.environ.get("ORCA_TERMINAL_HANDLE") or ""
+sys.exit(0 if mine and mine in {w.get("agentTerminalHandle") for w in ws} else 1)' 2>/dev/null; then
+      echo "go-skill-gate: Orca 워커 세션 — 승인·점검은 코디네이터 계획에서 이미 했다(통과)" >&2
+      exit 0
+    fi
+  fi
+fi
+
 SELF=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 . "$SELF/_planpath.sh" 2>/dev/null || { echo "go-skill-gate: _planpath.sh 를 읽지 못함 — 점검 생략(훅 고장은 통과)" >&2; exit 0; }
 base=$(plan_base) || { echo "go-skill-gate: 계획 위치를 정하지 못함 — 점검 생략" >&2; exit 0; }

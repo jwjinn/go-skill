@@ -46,7 +46,12 @@ PY
 }
 call(){  # <tool> <skill>
   python3 -c 'import json,sys;print(json.dumps({"tool_name":sys.argv[1],"tool_input":{"skill":sys.argv[2]},"transcript_path":sys.argv[3],"session_id":"s"}))' "$1" "$2" "$TR" \
-    | CLAUDE_PROJECT_DIR="$T" bash "$HOOK" 2>"$T/err" >/dev/null; echo $?
+    | env -u ORCA_TERMINAL_HANDLE CLAUDE_PROJECT_DIR="$T" bash "$HOOK" 2>"$T/err" >/dev/null; echo $?
+}
+# Orca 워커 판별 시험용 — 가짜 orca 가 worker-list 로 $WL 을 낸다
+callw(){  # <핸들> <skill>
+  python3 -c 'import json,sys;print(json.dumps({"tool_name":"Skill","tool_input":{"skill":sys.argv[1]},"transcript_path":sys.argv[2],"session_id":"s"}))' "$2" "$TR" \
+    | ORCA_TERMINAL_HANDLE="$1" ORCA_BIN="$T/orca" CLAUDE_PROJECT_DIR="$T" bash "$HOOK" 2>"$T/err" >/dev/null; echo $?
 }
 
 echo "=== 막지 않아야 할 것"
@@ -70,6 +75,16 @@ rc=$(call Skill "go-review:go"); [ "$rc" = 2 ] && grep -q '초안' "$T/err" && o
 echo "=== 경로 ① — 이미 채택된 계획은 이어 간다"
 rm -f "$D"; printf '%s' "$GOOD" | sed 's/^## 요구 추적$/## 요구/' > "$S/plan.md"; mk_tr "$S/plan.md"
 rc=$(call Skill "go-review:go"); [ "$rc" = 0 ] && ok "이 세션이 채택한 미완료 plan.md → 통과(이미 승인된 계획)" || ng "경로 ①" "rc $rc · $(cat "$T/err")"
+
+echo "=== Orca 워커 세션 — 승인은 코디네이터 계획에서 이미 했다"
+rm -f "$S/plan.md"; printf '%s' "$GOOD" | sed 's/^## 요구 추적$/## 요구/' > "$D"; mk_tr ""   # 워커: 초안을 쓴 흔적도 요구 추적도 없다
+printf '#!/bin/sh\nprintf "%%s" "$WL"\n' > "$T/orca"; chmod +x "$T/orca"
+export WL='{"result":{"workers":[{"agentTerminalHandle":"term_w1"}]}}'
+rc=$(callw term_w1 "go-review:go"); [ "$rc" = 0 ] && grep -q '워커 세션' "$T/err" && ok "워커 핸들 → 초안·요구 추적 없이도 통과" || ng "워커 통과" "rc $rc · $(cat "$T/err")"
+rc=$(callw term_coord "go-review:go"); [ "$rc" = 2 ] && ok "대조군: 목록에 없는 핸들(코디네이터) → 그대로 거부" || ng "코디네이터 핸들" "rc $rc · $(cat "$T/err")"
+export WL='이건 JSON 이 아니다'
+rc=$(callw term_w1 "go-review:go"); [ "$rc" = 2 ] && ok "대조군: 목록이 깨지면 워커로 보지 않는다(점검 유지)" || ng "깨진 목록" "rc $rc · $(cat "$T/err")"
+unset WL
 
 echo
 echo "합계: 통과 $pass · 실패 $fail"
