@@ -30,7 +30,7 @@ fails(){ bad=$((bad+1)); say "  ⛔ $1"; }
 
 # ── ① 훅이 **정확히 한 번** 등록됐나 (2중 등록 탐지) ────────────────────────
 # 정본이 둘이면 게이트가 두 번 돌고 에이전트 이름이 충돌한다. 그리고 그 상태는 조용하다.
-names="go-precheck goal-echo plan-file-gate review-gate todo-completion-gate"
+names="go-precheck go-skill-gate goal-echo plan-file-gate review-gate todo-completion-gate"
 dupes=""; missing=""
 for n in $names; do
   inplug=0; inproj=0
@@ -49,7 +49,7 @@ elif [ -n "$missing" ]; then
 else
   # ⚠ **범위를 밝힌다** — 마켓플레이스 설치본·사용자 레벨 settings.json 은 보지 않는다.
   #   「2중 0」이라 단언하면 그 경로의 2중 등록을 매 세션 「없음」으로 확인해 주는 셈이 된다.
-  pass "훅 등록 5/5 · 이 범위(플러그인 hooks.json + 프로젝트 settings.json)에서 각각 1회"
+  pass "훅 등록 6/6 · 이 범위(플러그인 hooks.json + 프로젝트 settings.json)에서 각각 1회"
 fi
 
 # ── ② 로컬 사본이 없나 (드리프트 탐지) ──────────────────────────────────────
@@ -205,7 +205,7 @@ fi
 # ── ⑨ 외부 도구가 다 있나 ───────────────────────────────────────────────────
 #
 # ⭐⭐ **「설치했다」와 「돌아간다」는 다르다.** 이 체인은 jq·python3·git 위에 서 있고,
-#   그중 jq 가 없으면 위 ①에서 「등록 5/5」로 확인한 그 훅들이 **붙어 있는 채로 아무것도
+#   그중 jq 가 없으면 위 ①에서 「등록 6/6」으로 확인한 그 훅들이 **붙어 있는 채로 아무것도
 #   보지 않는다**(재현 기록은 `_deps.sh` 머리말). 등록 확인만으로는 그 상태를 구분할 수 없다.
 # ⚠ 여기서는 **있는지만** 본다. codex 가 실제로 도는지는 `scripts/deps-check.sh --deep` 이다 —
 #   느린 검사를 세션 시작에 넣으면 사람이 훅을 끈다.

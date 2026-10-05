@@ -26,7 +26,7 @@ rm -f $STAMP_GLOB 2>/dev/null || true
 echo "=== 정상 프로젝트"
 mkproj
 out=$(run)
-chk "훅 2중 등록 없음을 확인한다"      "$out" '훅 등록 5/5' yes
+chk "훅 2중 등록 없음을 확인한다"      "$out" '훅 등록 6/6' yes
 chk "로컬 사본 0개를 확인한다"          "$out" '로컬 사본 0개' yes
 chk "결함 0"                            "$out" '결함 0' yes
 chk "⭐ 호출 이름을 말한다(관찰 O-1)"   "$out" '호출:' yes

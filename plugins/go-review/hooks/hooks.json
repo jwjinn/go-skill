@@ -1,5 +1,5 @@
 {
-  "description": "go-review 게이트 — 세션 시작 진단(doctor) · 계획 승인 전제 확인(/go) · 목표 재정렬(매 턴) · 완주 2축(도구·파일) · 리뷰 반영",
+  "description": "go-review 게이트 — 세션 시작 진단(doctor) · 계획 승인 전제 확인(/go · 모델 자가 호출 포함) · 목표 재정렬(매 턴) · 완주 2축(도구·파일) · 리뷰 반영",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -51,6 +51,19 @@
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/doctor.sh\" --hook",
             "timeout": 20,
             "statusMessage": "go 체인 진단(2중 등록·로컬 사본·codex·계획 소유자)"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/go-skill-gate.sh\"",
+            "timeout": 20,
+            "statusMessage": "/go 자가 호출 사전 점검(결정·요구 추적·이전 결정·최종 검증)"
           }
         ]
       }

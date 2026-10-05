@@ -107,7 +107,9 @@ setup; printf '%s' "$DEC_CLOSED" > "$T/.claude/plan-draft.md"; setmtime "$T/.cla
 out=$(run "/go")
 printf '%s' "$out" | grep -q '전부 닫힘(2건)' && ok "전부 닫히면 ✅ 를 말한다" || ng "닫힘 인식" "$out"
 printf '%s' "$out" | grep -q '그대로' && ok "닫혔으면 이관을 지시한다" || ng "닫힘 후 이관" "$out"
-printf '%s' "$out" | grep -q '착수하지 마라' && ng "닫혔는데 착수 금지" "$out" || ok "닫혔으면 착수 금지가 없다"
+# ⚠ 2026-10-05: 착수를 막는 이유가 둘이 됐다(열린 결정 · 계획 점검 위반). 여기서 재는 것은 결정 절의 문구뿐이다 —
+#   이 픽스처에는 요구 추적·V 절이 없어 계획 점검은 위반을 낸다(그 경로는 아래 「계획 점검」 절이 잰다).
+printf '%s' "$out" | grep -q '결정 필요(승인 전) 절에 열린 항목' && ng "닫혔는데 착수 금지" "$out" || ok "닫혔으면 결정 절의 착수 금지가 없다"
 cleanup
 setup; printf '%s' "$DRAFT"'- [ ] P0-3 사용자 확인 후 배포한다\n' > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
 out=$(run "/go")
@@ -640,6 +642,46 @@ setup
 out=$(run "/go-review:go 전부")
 printf '%s' "$out" | grep -q '3/5 항목' \
   && ok "⑦-b 고정 절 뒤에 온 작업 절은 다시 센다(제외가 절 경계에서 끝난다)" || ng "제외 범위" "$out"
+cleanup
+
+echo "=== ⭐⭐ 계획 점검 — 요구 추적 · 이전 결정 대조 · 최종 검증(2026-10-05)"
+PC_FULL="$DEC_CLOSED"'
+## 요구 추적
+추적 시작: 2026-10-05T01:00:00Z
+| 인용 | 분류 | 대응 |
+|---|---|---|
+| 알림 전송 채널을 고쳐 줘 | 요구 | P0-1 |
+
+## V — 최종 검증
+- [ ] V1 수용 기준 충족표
+- [ ] V2 독립 검증자
+'
+mktr(){  # <출력> <발화…> — 사람 발화마다 한 줄(시각은 추적 시작 뒤)
+  local o="$1"; shift; : > "$o"; local i=0
+  for m in "$@"; do i=$((i+1))
+    python3 -c 'import json,sys;print(json.dumps({"type":"user","timestamp":"2026-10-05T02:0%s:00Z"%sys.argv[2],"uuid":"u%s"%sys.argv[2],"message":{"role":"user","content":sys.argv[1]}},ensure_ascii=False))' "$m" "$i" >> "$o"
+  done
+  # 이 세션이 초안을 쓴 흔적 — 없으면 「다른 세션의 초안」으로 읽힌다(채택 판별)
+  python3 -c 'import json,sys;print(json.dumps({"type":"assistant","timestamp":"2026-10-05T02:30:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"w1","name":"Write","input":{"file_path":sys.argv[1],"content":"x"}}]}}))' "$T/.claude/plan-draft.md" >> "$o"; }
+setup; printf '%s' "$DEC_CLOSED" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+out=$(run "/go")
+printf '%s' "$out" | grep -q '계획 점검 위반' && printf '%s' "$out" | grep -q '요구 추적' \
+  && ok "결정이 닫혀도 요구 추적·V 절이 없으면 위반을 말한다" || ng "점검 위반 미보고" "$out"
+cleanup
+setup; printf '%s' "$PC_FULL" > "$T/.claude/plan-draft.md"; setmtime "$T/.claude/plan-draft.md" "$NOW"
+mktr "$T/tr.jsonl" "알림 전송 채널을 고쳐 줘 지금 안 보인다"
+out=$(runtr "/go" "$T/tr.jsonl")
+printf '%s' "$out" | grep -q '✅ 계획 점검' && ok "세 절이 다 있고 발화가 덮이면 ✅" || ng "점검 통과 사례" "$out"
+printf '%s' "$out" | grep -q '착수하지 마라' && ng "통과인데 착수 금지가 나왔다" "$out" || ok "통과면 착수 금지 문구가 없다"
+# 대조군 — 표가 받지 않은 사람 발화 하나를 더하면 위반이고 그 발화를 지목한다
+mktr "$T/tr.jsonl" "알림 전송 채널을 고쳐 줘 지금 안 보인다" "그리고 로그 화면도 검색이 안 된다 고쳐 줘"
+out=$(runtr "/go" "$T/tr.jsonl")
+printf '%s' "$out" | grep -q '계획 점검 위반' && printf '%s' "$out" | grep -q '로그 화면도' \
+  && ok "대조군: 덮이지 않은 발화 → 위반 + 그 발화 지목" || ng "대조군 미발화" "$out"
+# 잴 수 없음 — 대화 기록이 없으면 통과가 아니라 「재지 못했다」
+out=$(run "/go")
+printf '%s' "$out" | grep -q '재지 못했다' && ok "대화 기록 없음 → 「재지 못했다」(통과 아님)" || ng "rc 2 표기" "$out"
+printf '%s' "$out" | grep -q '✅ 계획 점검' && ng "잴 수 없는데 ✅" "$out" || ok "잴 수 없으면 ✅ 가 없다"
 cleanup
 
 printf '\npass=%s fail=%s\n' "$pass" "$fail"
