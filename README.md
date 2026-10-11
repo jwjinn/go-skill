@@ -6,6 +6,7 @@ Claude Code 로 개발할 때 「계획 → 구현 → 리뷰 → 반영」을 �
 | 이름 | 종류 | 하는 일 |
 |---|---|---|
 | `plan-gate` | 플러그인 (Stop 훅 1개) | 승인된 계획 파일에 미완료 체크박스가 남았는데 턴을 끝내려 하면 거부한다 |
+| `review-loop` | 스킬 | 구현 뒤 마무리 한 사이클을 한 번에 돈다: codex 리뷰(민감 영역이면 adversarial 추가) → web 이면 슬롭 스캔 → 발견을 코드로 검증해 확정 결함만 반영 → 머지 전 검사 → 커밋·PR. 리뷰어는 codex 하나이고 Claude 는 검증·수정만 한다 |
 | `go` | 스킬 (사용자 호출 전용) | 손에 익은 대로 `/go` 를 치면 새 흐름을 안내한다 |
 
 나머지 단계는 Claude Code 내장 기능과 OpenAI 의 공식 codex 플러그인([openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc))이 맡는다.
@@ -36,15 +37,18 @@ flowchart TD
 
     GT -->|"전부 닫혔다"| CR
 
-    subgraph S3["3. 리뷰 · 문맥과 모델이 다른 두 눈"]
-        CR["내장 /code-review<br/>Claude · 별도 서브에이전트"] --> CX["/codex:review --model 모델 --base origin/main<br/>다른 모델 계열 · 읽기 전용"]
-        CX --> SEN{"인증·과금·마이그레이션·<br/>시크릿·권한을 건드렸나"}
-        SEN -->|"예"| ADV["/codex:adversarial-review<br/>집중 영역을 붙여 한 번 더"]
+    subgraph S3["3. 마무리 · /review-loop 한 번 — 리뷰는 codex, 검증·수정은 Claude"]
+        CX["codex 리뷰<br/>다른 모델 계열 · 읽기 전용"] --> SEN{"인증·과금·마이그레이션·<br/>시크릿·권한을 건드렸나"}
+        SEN -->|"예"| ADV["codex adversarial 리뷰<br/>집중 영역을 붙여 한 번 더"]
+        SEN -->|"아니오"| WB{"web 을 바꿨나"}
+        ADV --> WB
+        WB -->|"예"| SL["kill-ai-slop 스캔<br/>바꾼 파일의 적중만 분류"]
+        WB -->|"아니오"| FX
+        SL --> FX["발견마다 해당 구간만 열어 검증<br/>확정 결함만 반영 · 재리뷰 없음"]
+        FX --> CK["머지 전 검사<br/>pre-merge-check 또는 빌드 게이트"]
     end
 
-    SEN -->|"아니오"| FX
-    ADV --> FX["반영 · 한 단계에 한 사이클"]
-    FX --> PR(["PR · 머지 전 합본 리뷰 1회"])
+    CK --> PR(["커밋 · PR · 사람이 머지"])
 ```
 
 사람은 앞(무엇을 만들지, 계획 승인)과 뒤(PR)에 있고, 중간을 지탱하는 것은 Stop 훅 하나다.
@@ -55,11 +59,13 @@ flowchart TD
 1) Shift+Tab → plan mode.   「대시보드 폴링을 줄이고 그 효과를 잰다」
 2) 계획이 나오면 승인한다.     계획 파일에 - [ ] 가 있으면 완주 대상이 된다
 3) 구현한다.                 끝낸 항목은 [x] 로 닫는다. 남은 채로는 턴이 끝나지 않는다
-4) /code-review  →  /codex:review --model gpt-6.1-sol --base origin/main
-5) 반영하고 PR.
+4) /review-loop              「리뷰 돌려」라고 말해도 된다
+5) 보고를 읽고 PR 을 머지한다. 머지까지 맡기려면 /review-loop --merge
 ```
 
-codex 리뷰 모델은 `--model` 로 고른다. 빼면 `~/.codex/config.toml` 의 `model` 이 쓰인다. 추론 강도는 리뷰 명령에 옵션이 없어서 언제나 그 파일의 `model_reasoning_effort` 를 따른다.
+`/review-loop` 이 codex 리뷰 → (web 이면) 슬롭 스캔 → 검증·반영 → 검사 → 커밋·PR 을 한 번에 돈다. 슬래시 명령 `/codex:review` 는 모델이 부를 수 없게 막혀 있어서 이 스킬은 플러그인의 companion 스크립트를 직접 실행한다.
+리뷰어는 codex 하나다. 처음에는 내장 `/code-review` 도 함께 돌렸는데, 리뷰마다 Claude 토큰이 한 세션분 더 들어 뺐다(2026-10-11). Claude 는 codex 발견을 해당 구간만 열어 검증하고 고치는 역할만 한다. codex 가 실패하면 조용히 Claude 리뷰로 바꾸지 않고 사용자에게 묻는다.
+codex 모델은 `~/.codex/config.toml` 의 `model` 을 쓴다(Orca 세션은 `$CODEX_HOME` 의 것). 바꾸려면 `--model` 을 companion 에 넘긴다. 추론 강도는 리뷰 명령에 옵션이 없어서 언제나 그 파일의 `model_reasoning_effort` 를 따른다.
 
 멈추게 하려면 계획 파일을 지우거나 체크박스를 전부 닫는다. 범위 밖으로 뺀 항목은 `[x]` 로 위장하지 말고 줄을 지운다.
 
