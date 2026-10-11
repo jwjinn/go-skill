@@ -82,6 +82,26 @@ run "[x] 가 아닌 표식은 미완료" "$D/p2.md" "$TR" s-b2 BLOCK
 printf -- '* [ ] 별표 불릿\n  - [ ] 들여쓴 하위\n' > "$D/p3.md"; touch_at "$D/p3.md" "$T_NEW"
 run "별표·들여쓰기도 센다" "$D/p3.md" "$TR" s-b3 BLOCK
 
+echo "=== plan mode — 승인 전 계획은 막지 않는다 (2026-10-11)"
+# 내장 plan mode 는 승인 전에 계획 파일을 쓴다. 같은 파일·같은 transcript 에서 모드만 바꿔
+# 세 방향을 잰다 — plan 이면 통과, 승인 뒤의 모드(default·bypassPermissions)면 그대로 차단.
+runm() { # $1=label $2=plan $3=transcript $4=session $5=permission_mode $6=expect
+  out=$(printf '{"session_id":"%s","transcript_path":"%s","stop_hook_active":false,"permission_mode":"%s"}' "$4" "$3" "$5" \
+        | CLAUDE_PLAN_FILE="$2" bash "$H")
+  got=$(printf '%s' "$out" | jq -r 'if .decision then .decision elif .systemMessage then "WARN" else "PASS" end' 2>/dev/null)
+  [ -z "$got" ] && got=PASS
+  [ "$got" = "block" ] && got=BLOCK
+  if [ "$got" = "$6" ]; then
+    echo "  ok   $1  → $got"; pass=$((pass+1))
+  else
+    echo "  FAIL $1  → got=$got want=$6"; fail=$((fail+1))
+  fi
+}
+printf -- '- [ ] 승인 대기 1\n- [ ] 승인 대기 2\n' > "$D/pm.md"; touch_at "$D/pm.md" "$T_NEW"
+runm "plan 모드 → 통과(승인 전)"                "$D/pm.md" "$TR" s-pm1 plan PASS
+runm "default 모드 → 차단(승인 뒤 · 대조군)"     "$D/pm.md" "$TR" s-pm2 default BLOCK
+runm "bypass 모드 → 차단(승인 뒤 · 대조군)"      "$D/pm.md" "$TR" s-pm3 bypassPermissions BLOCK
+
 echo "=== 조용해야 하는 경우(오탐 방지)"
 printf -- '- [x] 1단계\n- [X] 2단계\n' > "$D/p4.md"; touch_at "$D/p4.md" "$T_NEW"
 run "전부 완료(대문자 X 포함)" "$D/p4.md" "$TR" s-p1 PASS

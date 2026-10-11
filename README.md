@@ -37,7 +37,7 @@ flowchart TD
     GT -->|"전부 닫혔다"| CR
 
     subgraph S3["3. 리뷰 · 문맥과 모델이 다른 두 눈"]
-        CR["내장 /code-review<br/>Claude · 별도 서브에이전트"] --> CX["/codex:review --base origin/main<br/>다른 모델 계열 · 읽기 전용"]
+        CR["내장 /code-review<br/>Claude · 별도 서브에이전트"] --> CX["/codex:review --model 모델 --base origin/main<br/>다른 모델 계열 · 읽기 전용"]
         CX --> SEN{"인증·과금·마이그레이션·<br/>시크릿·권한을 건드렸나"}
         SEN -->|"예"| ADV["/codex:adversarial-review<br/>집중 영역을 붙여 한 번 더"]
     end
@@ -55,9 +55,11 @@ flowchart TD
 1) Shift+Tab → plan mode.   「대시보드 폴링을 줄이고 그 효과를 잰다」
 2) 계획이 나오면 승인한다.     계획 파일에 - [ ] 가 있으면 완주 대상이 된다
 3) 구현한다.                 끝낸 항목은 [x] 로 닫는다. 남은 채로는 턴이 끝나지 않는다
-4) /code-review  →  /codex:review --base origin/main
+4) /code-review  →  /codex:review --model gpt-6.1-sol --base origin/main
 5) 반영하고 PR.
 ```
+
+codex 리뷰 모델은 `--model` 로 고른다. 빼면 `~/.codex/config.toml` 의 `model` 이 쓰인다. 추론 강도는 리뷰 명령에 옵션이 없어서 언제나 그 파일의 `model_reasoning_effort` 를 따른다.
 
 멈추게 하려면 계획 파일을 지우거나 체크박스를 전부 닫는다. 범위 밖으로 뺀 항목은 `[x]` 로 위장하지 말고 줄을 지운다.
 
@@ -110,7 +112,9 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    S(["턴을 끝내려 한다"]) --> Q1{"계획 파일이 있나<br/>plans/*.md · plans/*/plan.md"}
+    S(["턴을 끝내려 한다"]) --> Q0{"지금 plan mode 인가"}
+    Q0 -->|"그렇다"| PP(["통과 · 아직 승인 전"])
+    Q0 -->|"아니다"| Q1{"계획 파일이 있나<br/>plans/*.md · plans/*/plan.md"}
     Q1 -->|"없다"| P0(["통과"])
     Q1 -->|"있다"| Q2{"이 세션이 그 파일을 썼나<br/>Write · Edit 흔적"}
     Q2 -->|"아니다"| P1(["통과 · 남의 계획이라고 한 번 알린다"])
@@ -139,6 +143,7 @@ flowchart TD
 
 완화 장치를 그대로 두었다. 없으면 사람이 훅을 끄고, 그러면 게이트가 통째로 사라진다.
 
+- plan mode 인 동안은 막지 않는다. 내장 plan mode 는 승인 전에 계획 파일을 쓰므로, 계획을 세우다 질문하고 멈추는 것이 정상이다. Stop 입력의 `permission_mode` 가 `"plan"` 이면 통과하고, 승인해서 모드가 바뀐 뒤부터 본다(2026-10-11 실측으로 추가)
 - 세션당 상한 8회(`CLAUDE_PLAN_GATE_MAX`). 그 뒤로는 메시지 없이 통과한다
 - 미완료가 3회 연속 줄지 않으면 차단을 풀고 「무엇이 막고 있나」를 말하게 한다
 - 훅 자체가 고장 나면 통과한다. 다만 `jq` 가 없어서 아무것도 못 본 경우에는 그 사실을 알린다
@@ -190,7 +195,9 @@ flowchart TD
 | `plan-gate` | 미완료 1개를 남긴 채 끝내려 하자 3회 차단했고, 그 뒤 「진전 없음」으로 차단을 풀었다 |
 | `/codex:review` | 두 결함을 모두 찾았고(P1 · P2), 각각 실행 예시로 재현했다 |
 | `/code-review` | 두 결함을 모두 찾았고, 동작 변화 1건과 기존 경계 결함 1건을 더 짚었다. 비용 $0.32 |
-| `plan-gate` 대조군 | `plugins/plan-gate/hooks/plan-file-gate.test.sh` 79/79, 평면 계획 파일(`plans/*.md`) 차단 1/1 |
+| `plan-gate` + plan mode | 승인 전 plan mode 에서 계획을 세우고 멈추면 차단 0회. 승인 뒤 일부만 하고 멈추면 남은 항목을 짚으며 차단 |
+| `/codex:review --model` | 없는 모델 이름이면 리뷰가 실패하고, `gpt-6.1-sol` 이면 두 결함을 찾는다. 모델 지정이 codex 까지 실제로 전달된다 |
+| `plan-gate` 대조군 | `plugins/plan-gate/hooks/plan-file-gate.test.sh` 82/82. plan mode 판정 줄을 빼면 해당 대조군만 붉어진다 |
 
 ---
 
