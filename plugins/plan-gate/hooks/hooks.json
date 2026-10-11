@@ -1,0 +1,17 @@
+{
+  "description": "plan-gate — 계획 완주 확인(파일 축 하나)",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/plan-file-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "계획 완주 확인(미완료 단계 차단)"
+          }
+        ]
+      }
+    ]
+  }
+}
