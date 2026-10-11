@@ -15,6 +15,7 @@ argument-hint: "[--base <ref>] [--no-pr] [--merge] [집중 영역 한 문장]"
 
 - `git fetch -q origin` 뒤 `git diff --stat <base>...HEAD` 와 `git status --short` 로 리뷰 대상을 센다.
   둘 다 비어 있으면 「리뷰할 변경이 없다」고 말하고 끝낸다.
+- base 가 없으면(원격이 없거나 ref 가 없으면) `HEAD~1` 을 base 로 쓰고 그 사실을 보고에 적는다.
 - 저장소에 `.claude/review-rules.md` 가 있으면 읽는다. 그 저장소의 함정·심각도 기준이고, 아래 두 리뷰의
   발견을 분류할 때 그 기준을 쓴다.
 - 변경 파일 목록에서 **민감 영역**을 가른다: 인증·인가·과금·마이그레이션·시크릿·컨테이너 권한

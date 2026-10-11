@@ -7,7 +7,7 @@ Claude Code 로 개발할 때 「계획 → 구현 → 리뷰 → 반영」을 �
 |---|---|---|
 | `plan-gate` | 플러그인 (Stop 훅 1개) | 승인된 계획 파일에 미완료 체크박스가 남았는데 턴을 끝내려 하면 거부한다 |
 | `review-loop` | 스킬 | 구현 뒤 마무리 한 사이클을 한 번에 돈다: codex 리뷰(민감 영역이면 adversarial 추가) → web 이면 슬롭 스캔 → 발견을 코드로 검증해 확정 결함만 반영 → 머지 전 검사 → 커밋·PR. 리뷰어는 codex 하나이고 Claude 는 검증·수정만 한다 |
-| `go` | 스킬 (사용자 호출 전용) | 손에 익은 대로 `/go` 를 치면 새 흐름을 안내한다 |
+| `go` | 스킬 | 처음부터 끝까지 한 호출: `/go <요청>` → 실측 → 계획 초안(`plans/<slug>/draft.md`) → 결정 닫기 → 「시작·고친다·보류」로 만족할 때까지 → 시작하면 `plan.md` 확정(plan-gate 가 지킴) → 구현 → `/review-loop` → 최종 보고. 인자 없이 치면 미완료 계획 재개 |
 
 나머지 단계는 Claude Code 내장 기능과 OpenAI 의 공식 codex 플러그인([openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc))이 맡는다.
 예전 체인(go-review · go-tester · go-fanout · go-coder)은 `plugins/` 에 보관만 한다([보관](#보관)).
@@ -18,16 +18,19 @@ Claude Code 로 개발할 때 「계획 → 구현 → 리뷰 → 반영」을 �
 
 ```mermaid
 flowchart TD
-    U(["사람: 무엇을 만들지 말한다"]) --> PM
-    G["/go 를 쳤다면<br/>go 스킬이 이 흐름을 안내한다"] -.-> PM
+    U(["사람: /go <무엇을 만들지>"]) --> PM
 
-    subgraph S1["1. 계획 · 내장 plan mode"]
-        PM["Shift+Tab 으로 plan mode<br/>읽기만 하며 계획을 세운다"] --> PF["계획 파일 .claude/plans/*.md<br/>- [ ] 체크박스 · 결정 필요 절"]
-        PF --> OK{"사람이 승인하나"}
+    subgraph S1["1. 계획 · /go 안에서"]
+        PM["실측 — 읽기만 한다"] --> PF["초안 plans/slug/draft.md<br/>목표 계약 · - [ ] 단계 · 결정 필요"]
+        PF --> DQ{"결정 필요가 있나"}
+        DQ -->|"있다"| ASK(["한 자리에서 묻는다"]) --> PF
+        DQ -->|"없다"| OK{"시작 · 고친다 · 보류"}
+        OK -->|"고친다"| PF
     end
 
-    OK -->|"고쳐 달라"| PM
-    OK -->|"승인"| IM
+    OK -->|"보류"| HOLD(["초안만 남는다 · 아무것도 막히지 않음"])
+    OK -->|"시작"| CONF["plan.md 로 확정<br/>이때부터 plan-gate 가 본다"] --> IM
+    G["Shift+Tab plan mode 로 세운 계획도<br/>같은 자리에 놓이면 같은 게이트를 받는다"] -.-> CONF
 
     subgraph S2["2. 구현 · plan-gate 가 지킨다"]
         IM["구현하고, 끝낸 항목을 [x] 로 닫는다"] -->|"턴을 끝내려 하면"| GT{{"Stop 훅 plan-gate<br/>미완료가 남았나"}}
@@ -35,7 +38,7 @@ flowchart TD
         BL --> IM
     end
 
-    GT -->|"전부 닫혔다"| CR
+    GT -->|"전부 닫혔다 · /go 가 부른다"| CX
 
     subgraph S3["3. 마무리 · /review-loop 한 번 — 리뷰는 codex, 검증·수정은 Claude"]
         CX["codex 리뷰<br/>다른 모델 계열 · 읽기 전용"] --> SEN{"인증·과금·마이그레이션·<br/>시크릿·권한을 건드렸나"}
@@ -56,12 +59,16 @@ flowchart TD
 ### 다섯 줄로
 
 ```
-1) Shift+Tab → plan mode.   「대시보드 폴링을 줄이고 그 효과를 잰다」
-2) 계획이 나오면 승인한다.     계획 파일에 - [ ] 가 있으면 완주 대상이 된다
-3) 구현한다.                 끝낸 항목은 [x] 로 닫는다. 남은 채로는 턴이 끝나지 않는다
-4) /review-loop              「리뷰 돌려」라고 말해도 된다
-5) 보고를 읽고 PR 을 머지한다. 머지까지 맡기려면 /review-loop --merge
+1) /go 대시보드 폴링을 줄이고 그 효과를 잰다
+   → 실측하고 초안을 보여 준다. 결정할 것이 있으면 한 자리에서 묻는다
+2) 「시작 · 고친다 · 보류」 중 고른다. 고친다 → 메모대로 다시 쓴다. 만족할 때까지
+3) 시작 → plan.md 확정. 끝낸 항목은 [x] 로 닫히고, 남은 채로는 턴이 끝나지 않는다
+4) 구현이 끝나면 /go 가 /review-loop 을 부른다(codex 리뷰 → 검증·반영 → 검사 → PR)
+5) 최종 보고 다섯 절을 읽고 PR 을 머지한다. 머지까지 맡기려면 「/go … 머지까지」
 ```
+
+`/review-loop` 만 따로 쓸 수도 있다(계획 없이 한 수정 뒤에 「리뷰 돌려」). `/go` 를 인자 없이 치면 미완료 계획을 이어간다.
+Shift+Tab 의 내장 plan mode 로 세운 계획도 같은 `plansDirectory` 에 놓이므로 같은 게이트를 받는다 — 둘 중 편한 쪽을 쓴다.
 
 `/review-loop` 이 codex 리뷰 → (web 이면) 슬롭 스캔 → 검증·반영 → 검사 → 커밋·PR 을 한 번에 돈다. 슬래시 명령 `/codex:review` 는 모델이 부를 수 없게 막혀 있어서 이 스킬은 플러그인의 companion 스크립트를 직접 실행한다.
 리뷰어는 codex 하나다. 처음에는 내장 `/code-review` 도 함께 돌렸는데, 리뷰마다 Claude 토큰이 한 세션분 더 들어 뺐다(2026-10-11). Claude 는 codex 발견을 해당 구간만 열어 검증하고 고치는 역할만 한다. codex 가 실패하면 조용히 Claude 리뷰로 바꾸지 않고 사용자에게 묻는다.
