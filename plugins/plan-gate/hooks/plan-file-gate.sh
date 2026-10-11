@@ -48,6 +48,16 @@ fi
 session=$(printf '%s' "$input" | jq -r '.session_id // "unknown"' 2>/dev/null) || exit 0
 transcript=$(printf '%s' "$input" | jq -r '.transcript_path // ""' 2>/dev/null) || exit 0
 
+# ── plan mode 안에서는 막지 않는다 (2026-10-11 · plan-gate 로 떼어 낸 뒤 실측으로 잡았다)
+#   옛 체인은 `/go` 로 **승인한 뒤에** 계획 파일을 만들었다. 내장 plan mode 는 승인 **전에**
+#   plansDirectory 에 계획 파일을 쓴다. 그래서 계획을 세우다 질문하고 턴을 끝내는 정상 경로가
+#   「미완료」로 막혔다(새 세션 E2E: 승인 전인데 차단 문구 9회).
+#   Stop 입력의 permission_mode 가 "plan" 이면 아직 승인되지 않은 계획이다(실측: plan 모드에서
+#   "plan", bypass 에서 "bypassPermissions" 가 온다). 승인하면 모드가 바뀌고 그때부터 본다.
+#   필드가 없으면(옛 하네스) 종전대로 판정한다 — 모르는 것을 근거로 열지 않는다.
+mode=$(printf '%s' "$input" | jq -r '.permission_mode // ""' 2>/dev/null)
+[ "$mode" = "plan" ] && exit 0
+
 # 계획 파일 경로. CLAUDE_PROJECT_DIR 이 없으면 **cwd** 에서 찾는다.
 # ⚠ 스크립트 위치에서 역산하지 마라 — 플러그인으로 배포되면 그것은 코드 디렉토리다.
 #
