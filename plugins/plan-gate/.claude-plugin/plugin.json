@@ -1,0 +1,7 @@
+{
+  "name": "plan-gate",
+  "version": "0.1.0",
+  "description": "승인된 다단계 계획의 완주 게이트 하나. .claude/plans/ 의 계획 파일(체크박스)에 미완료가 남은 채 세션이 끝나는 것을 Stop 에서 막는다. go-review 0.6.0 의 plan-file-gate.sh 를 그대로 떼어 낸 것이다(2026-10-10 · 체인 축소). 계획 수립은 내장 plan mode, 리뷰는 내장 /code-review 와 codex 플러그인이 맡는다.",
+  "author": { "name": "jwjinn" },
+  "license": "MIT"
+}
