@@ -1,13 +1,17 @@
 # go-skill
 
 Claude Code 로 개발할 때 「계획 → 구현 → 리뷰 → 반영」을 굴리는 최소 구성이다.
-2026-10-10 에 크게 줄였고, 지금 이 저장소가 직접 제공하는 것은 둘뿐이다.
+2026-10-10 에 크게 줄였고, 지금 이 저장소가 직접 제공하는 것은 플러그인 `go` 하나다. 명령 셋과 Stop 훅 하나가 들어 있다.
 
-| 이름 | 종류 | 하는 일 |
+| 명령 | 하는 일 | Claude 가 스스로 부르나 |
 |---|---|---|
-| `plan-gate` | 플러그인 (Stop 훅 1개) | 승인된 계획 파일에 미완료 체크박스가 남았는데 턴을 끝내려 하면 거부한다 |
-| `review-loop` | 스킬 | 구현 뒤 마무리 한 사이클을 한 번에 돈다: codex 리뷰(민감 영역이면 adversarial 추가) → web 이면 슬롭 스캔 → 발견을 코드로 검증해 확정 결함만 반영 → 머지 전 검사 → 커밋·PR. 리뷰어는 codex 하나이고 Claude 는 검증·수정만 한다 |
-| `go` | 스킬 | 처음부터 끝까지 한 호출: `/go <요청>` → 실측 → 계획 초안(`plans/<slug>/draft.md`) → 결정 닫기 → 「시작·고친다·보류」로 만족할 때까지 → 시작하면 `plan.md` 확정(plan-gate 가 지킴) → 구현 → `/review-loop` → 최종 보고. 인자 없이 치면 미완료 계획 재개 |
+| `/go:plan <요청>` | 실측 → 초안(`.claude/plans/<slug>/draft.md`) → 결정을 한 자리에서 닫음 → 사용자가 더하고 빼는 대로 몇 번이든 고침. 코드는 고치지 않는다. 인자 없이 치면 보류한 초안을 다시 연다 | 예 (「계획 세워줘」) |
+| `/go:start` | **승인.** 초안을 `plan.md` 로 확정 → 구현(병렬 배치는 워크트리 워커로 동시에 · 워커마다 codex 리뷰) → `/go:review` → 보고 5절. 인자 없이 치면 남은 단계를 이어간다 | **아니오 — 사람만 친다** |
+| `/go:review` | 마무리 한 사이클: codex 리뷰(민감 영역이면 adversarial 추가) → web 이면 슬롭 스캔 → 해당 구간만 열어 검증 → 확정 결함만 반영 → 머지 전 검사 → 커밋·PR | 예 (`/go:start` 와 워커가 부른다) |
+| Stop 훅 (plan-gate) | 확정된 `plan.md` 에 미완료 체크박스가 남았는데 턴을 끝내려 하면 거부한다 | 자동 |
+
+`/go:start` 에 `disable-model-invocation` 을 걸어 둔 것이 「승인은 사람만 한다」의 구조다. 말로 「시작해」라고 해도 `/go:plan` 은 구현하지 않고 「`/go:start` 를 쳐 주세요」라고 답한다.
+단계마다 이름 있는 명령을 치고 싶다는 요청(2026-10-12)으로 나눴다. 그 전 판(단일 `/go` · `review-loop` · `plan-gate`)은 git 기록에 있다.
 
 나머지 단계는 Claude Code 내장 기능과 OpenAI 의 공식 codex 플러그인([openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc))이 맡는다.
 예전 체인(go-review · go-tester · go-fanout · go-coder)은 `plugins/` 에 보관만 한다([보관](#보관)).
@@ -18,29 +22,29 @@ Claude Code 로 개발할 때 「계획 → 구현 → 리뷰 → 반영」을 �
 
 ```mermaid
 flowchart TD
-    U(["사람: /go <무엇을 만들지>"]) --> PM
+    U(["사람: /go:plan <무엇을 만들지>"]) --> PM
 
-    subgraph S1["1. 계획 · /go 안에서"]
+    subgraph S1["1. 계획 · /go:plan — 몇 번이든"]
         PM["실측 — 읽기만 한다"] --> PF["초안 plans/slug/draft.md<br/>목표 계약 · - [ ] 단계 · 병렬 배치 · 결정 필요"]
         PF --> DQ{"결정 필요가 있나"}
         DQ -->|"있다"| ASK(["한 자리에서 묻는다"]) --> PF
-        DQ -->|"없다"| OK{"시작 · 고친다 · 보류"}
-        OK -->|"고친다"| PF
+        DQ -->|"없다"| OK{"사람"}
+        OK -->|"말로 더하고 뺀다"| PF
     end
 
-    OK -->|"보류"| HOLD(["초안만 남는다 · 아무것도 막히지 않음"])
-    OK -->|"시작"| CONF["plan.md 로 확정<br/>이때부터 plan-gate 가 본다"] --> IM
+    OK -->|"그대로 둔다"| HOLD(["초안만 남는다 · 아무것도 막히지 않음<br/>/go:plan 으로 다시 연다"])
+    OK -->|"/go:start — 사람만 칠 수 있다"| CONF["plan.md 로 확정<br/>이때부터 plan-gate 가 본다"] --> IM
     G["Shift+Tab plan mode 로 세운 계획도<br/>같은 자리에 놓이면 같은 게이트를 받는다"] -.-> CONF
 
-    subgraph S2["2. 구현 · plan-gate 가 지킨다"]
+    subgraph S2["2. 구현 · /go:start — plan-gate 가 지킨다"]
         IM["구현하고, 끝낸 항목을 [x] 로 닫는다<br/>배치가 여럿이면 워크트리 워커 동시에:<br/>워커마다 개발 → codex 리뷰 → 수정 → 순서대로 머지"] -->|"턴을 끝내려 하면"| GT{{"Stop 훅 plan-gate<br/>미완료가 남았나"}}
         GT -->|"남았다"| BL["차단 · 남은 항목을 줄 번호로 짚는다"]
         BL --> IM
     end
 
-    GT -->|"전부 닫혔다 · /go 가 부른다"| CX
+    GT -->|"전부 닫혔다 · /go:start 가 부른다"| CX
 
-    subgraph S3["3. 마무리 · /review-loop 한 번 — 리뷰는 codex, 검증·수정은 Claude"]
+    subgraph S3["3. 마무리 · /go:review 한 번 — 리뷰는 codex, 검증·수정은 Claude"]
         CX["codex 리뷰<br/>다른 모델 계열 · 읽기 전용"] --> SEN{"인증·과금·마이그레이션·<br/>시크릿·권한을 건드렸나"}
         SEN -->|"예"| ADV["codex adversarial 리뷰<br/>집중 영역을 붙여 한 번 더"]
         SEN -->|"아니오"| WB{"web 을 바꿨나"}
@@ -59,18 +63,18 @@ flowchart TD
 ### 다섯 줄로
 
 ```
-1) /go 대시보드 폴링을 줄이고 그 효과를 잰다
+1) /go:plan 대시보드 폴링을 줄이고 그 효과를 잰다
    → 실측하고 초안을 보여 준다. 결정할 것이 있으면 한 자리에서 묻는다
-2) 「시작 · 고친다 · 보류」 중 고른다. 고친다 → 메모대로 다시 쓴다. 만족할 때까지
-3) 시작 → plan.md 확정. 끝낸 항목은 [x] 로 닫히고, 남은 채로는 턴이 끝나지 않는다
-4) 구현이 끝나면 /go 가 /review-loop 을 부른다(codex 리뷰 → 검증·반영 → 검사 → PR)
-5) 최종 보고 다섯 절을 읽고 PR 을 머지한다. 머지까지 맡기려면 「/go … 머지까지」
+2) 「이것도 넣어」「저건 빼」 — 그냥 말하면 초안만 바뀐다. 만족할 때까지. 다음 날 이어서 하려면 /go:plan
+3) /go:start → plan.md 확정 → 구현. 끝낸 항목은 [x] 로 닫히고, 남은 채로는 턴이 끝나지 않는다
+4) 구현이 끝나면 /go:start 가 /go:review 를 부른다(codex 리뷰 → 검증·반영 → 검사 → PR)
+5) 최종 보고 다섯 절을 읽고 PR 을 머지한다. 머지까지 맡기려면 /go:start --merge
 ```
 
-`/review-loop` 만 따로 쓸 수도 있다(계획 없이 한 수정 뒤에 「리뷰 돌려」). `/go` 를 인자 없이 치면 미완료 계획을 이어간다.
+`/go:review` 만 따로 쓸 수도 있다(계획 없이 한 수정 뒤에 「리뷰 돌려」). 세션이 끊겼으면 `/go:start` 를 인자 없이 치면 남은 단계를 이어간다.
 Shift+Tab 의 내장 plan mode 로 세운 계획도 같은 `plansDirectory` 에 놓이므로 같은 게이트를 받는다 — 둘 중 편한 쪽을 쓴다.
 
-`/review-loop` 이 codex 리뷰 → (web 이면) 슬롭 스캔 → 검증·반영 → 검사 → 커밋·PR 을 한 번에 돈다. 슬래시 명령 `/codex:review` 는 모델이 부를 수 없게 막혀 있어서 이 스킬은 플러그인의 companion 스크립트를 직접 실행한다.
+`/go:review` 가 codex 리뷰 → (web 이면) 슬롭 스캔 → 검증·반영 → 검사 → 커밋·PR 을 한 번에 돈다. 슬래시 명령 `/codex:review` 는 모델이 부를 수 없게 막혀 있어서 이 스킬은 플러그인의 companion 스크립트를 직접 실행한다.
 리뷰어는 codex 하나다. 처음에는 내장 `/code-review` 도 함께 돌렸는데, 리뷰마다 Claude 토큰이 한 세션분 더 들어 뺐다(2026-10-11). Claude 는 codex 발견을 해당 구간만 열어 검증하고 고치는 역할만 한다. codex 가 실패하면 조용히 Claude 리뷰로 바꾸지 않고 사용자에게 묻는다.
 codex 모델은 `~/.codex/config.toml` 의 `model` 을 쓴다(Orca 세션은 `$CODEX_HOME` 의 것). 바꾸려면 `--model` 을 companion 에 넘긴다. 추론 강도는 리뷰 명령에 옵션이 없어서 언제나 그 파일의 `model_reasoning_effort` 를 따른다.
 
@@ -88,9 +92,9 @@ flowchart LR
         A3["/simplify · /security-review<br/>필요할 때만"]
     end
 
-    subgraph GS["이 저장소 · go-skill"]
-        B1["plan-gate<br/>Stop 훅 1개"]
-        B2["go 스킬<br/>안내만 한다"]
+    subgraph GS["이 저장소 · 플러그인 go"]
+        B1["Stop 훅 plan-gate"]
+        B2["/go:plan · /go:start · /go:review"]
     end
 
     subgraph OX["openai/codex-plugin-cc"]
@@ -169,11 +173,11 @@ flowchart TD
 
 | 자리 | 전 | 후 |
 |---|---|---|
-| 계획 · 승인 | `go-review:plan` → `go-review:go` (지시문 1,066줄) | 내장 plan mode |
-| 완주 강제 | Stop 훅 3축 + 매 턴 목표 재주입 + 세션 시작 진단 | `plan-gate` 하나 |
-| 리뷰 | `review-loop`: 리뷰어 셋 + 병합자 + 중복 제거 · 판정 · 측정 스크립트 | 내장 `/code-review` + `/codex:review` |
+| 계획 · 승인 | `go-review:plan` → `go-review:go` (지시문 1,066줄) | `/go:plan` → `/go:start` (사람만) |
+| 완주 강제 | Stop 훅 3축 + 매 턴 목표 재주입 + 세션 시작 진단 | Stop 훅 하나(plan-gate) |
+| 리뷰 | `review-loop`: 리뷰어 셋 + 병합자 + 중복 제거 · 판정 · 측정 스크립트 | `/go:review`: codex 하나 + Claude 는 검증·수정 |
 | 테스트 위임 | `go-tester` (로컬 모델) | 세션이 직접 쓴다 |
-| 병렬 워커 | `go-fanout` (Orca 워커 N명 · 코디네이터 지시문 600줄 · 훅 2개) | `/go` 초안의 「병렬 배치」 절. 파일 집합이 안 겹치는 배치를 내장 `Agent`(`isolation: worktree`)로 동시에 띄운다. 워커마다 안에서 「개발 → codex 리뷰 → 수정」을 한 번 돌고, 이 세션이 순서대로 머지해 합본 게이트와 합본 `/review-loop` 을 한 번 돈다(옛 fanout 과 같은 모양). 워커는 사람에게 묻지 못하므로 결정은 초안에서 닫는다 |
+| 병렬 워커 | `go-fanout` (Orca 워커 N명 · 코디네이터 지시문 600줄 · 훅 2개) | `/go:plan` 초안의 「병렬 배치」 절. 파일 집합이 안 겹치는 배치를 내장 `Agent`(`isolation: worktree`)로 동시에 띄운다. 워커마다 안에서 「개발 → codex 리뷰 → 수정」을 한 번 돌고, 이 세션이 순서대로 머지해 합본 게이트와 합본 `/review-loop` 을 한 번 돈다(옛 fanout 과 같은 모양). 워커는 사람에게 묻지 못하므로 결정은 초안에서 닫는다 |
 | 코드 규모 | go-review 실행 코드 약 6,000줄 + 지시문 약 2,000줄 · go-tester 2,507줄 · go-fanout 4,068줄 | plan-gate 751줄(공용 함수 포함) + 대조군 439줄 |
 
 ### 왜 줄였나
@@ -210,28 +214,21 @@ flowchart TD
 | `/code-review` | 두 결함을 모두 찾았고, 동작 변화 1건과 기존 경계 결함 1건을 더 짚었다. 비용 $0.32 |
 | `plan-gate` + plan mode | 승인 전 plan mode 에서 계획을 세우고 멈추면 차단 0회. 승인 뒤 일부만 하고 멈추면 남은 항목을 짚으며 차단 |
 | `/codex:review --model` | 없는 모델 이름이면 리뷰가 실패하고, `gpt-6.1-sol` 이면 두 결함을 찾는다. 모델 지정이 codex 까지 실제로 전달된다 |
-| `plan-gate` 대조군 | `plugins/plan-gate/hooks/plan-file-gate.test.sh` 82/82. plan mode 판정 줄을 빼면 해당 대조군만 붉어진다 |
+| `plan-gate` 대조군 | `plugins/go/hooks/plan-file-gate.test.sh` 82/82. plan mode 판정 줄을 빼면 해당 대조군만 붉어진다 |
 
 ---
 
 ## 설치
 
 ```
-# plan-gate (Stop 훅)
+# go (명령 셋 + Stop 훅)
 /plugin marketplace add jwjinn/go-skill
-/plugin install plan-gate@jwjinn-go-skill
+/plugin install go@jwjinn-go-skill
 
 # 교차 모델 리뷰
 /plugin marketplace add openai/codex-plugin-cc
 /plugin install codex@openai-codex
 /codex:setup                     # Review Gate 는 켜지 않는다
-```
-
-`go` 는 플러그인이 아니라 일반 스킬이다. 플러그인 스킬은 `/<플러그인>:<이름>` 으로 불리므로 `/go` 로 치려면 스킬 디렉토리에 직접 둬야 한다.
-
-```bash
-git clone https://github.com/jwjinn/go-skill
-ln -sfn "$PWD/go-skill/skills/go" ~/.claude/skills/go
 ```
 
 작업하는 저장소에는 설정 한 줄을 둔다. plan mode 가 쓰는 계획 파일과 plan-gate 가 보는 자리를 맞추는 것이다.
@@ -251,8 +248,8 @@ ln -sfn "$PWD/go-skill/skills/go" ~/.claude/skills/go
 개발 기계에서는 이 저장소를 심링크로 걸면 푸시 없이 바로 반영된다.
 
 ```bash
-ln -sfn "$PWD/plugins/plan-gate" ~/.claude/skills/plan-gate
-claude plugin list               # plan-gate@skills-dir 가 보이면 된다
+ln -sfn "$PWD/plugins/go" ~/.claude/skills/go
+claude plugin list               # go@skills-dir 가 보이면 된다
 ```
 
 마켓플레이스 설치와 심링크를 동시에 두면 같은 훅이 두 번 돈다. 하나만 둔다.
@@ -279,7 +276,7 @@ claude plugin list               # plan-gate@skills-dir 가 보이면 된다
 | `go-fanout` | 그 체인을 Orca 워커 N명에 fan-out | Orca 런타임과 `go-review` 가 필요하다 |
 | `go-coder` | 구현 작업 위임 | `go-review` 와 함께 걸어야 한다 |
 
-`plan-gate` 를 쓰면서 `go-review` 를 다시 걸면 완주 훅이 두 번 돈다. 되살릴 때는 `plan-gate` 를 먼저 내린다.
+`go` 를 쓰면서 `go-review` 를 다시 걸면 완주 훅이 두 번 돈다. 되살릴 때는 `go` 를 먼저 내린다.
 
 ---
 
