@@ -83,11 +83,20 @@ argument-hint: "<무엇을 만들지> | <초안 디렉토리 이름> | (없으�
 2. **목업 규약을 찾는다.** CLAUDE.md 와 `.claude/rules/*.md` 에서 「목업」을 검색해 가리키는 문서를 연다. 규약이
    자리·형식·디자인 시스템을 정한다.
 3. **자리를 정한다.**
-   - 규약이 Claude Design 디자인 시스템(Artifact 주소)을 지정하고 이 세션에 `Artifact` 도구가 있으면 → **캔버스**:
-     화면마다 Design 유형 캔버스 하나에 아트보드 A~D 를 그리고, 그 디자인 시스템을 **명시해서** 설치한다(조직
-     기본값이 따로 있어도 규약이 지정한 것을 쓴다). 캔버스 제목은 「<화면> 목업 4안」.
-   - 아니면 → **로컬 HTML**: 규약이 정한 폴더, 없으면 `.claude/plans/<slug>/mockups/<화면>/` 에 `A.html`~`D.html` 과
-     `index.html`.
+   - 규약이 Claude Design 디자인 시스템(Artifact 주소)을 지정했으면 → **캔버스**: 화면마다 Design 유형 캔버스 하나에
+     아트보드 A~D 를 그리고, 그 디자인 시스템을 **명시해서** 설치한다(조직 기본값이 따로 있어도 규약이 지정한 것을 쓴다).
+     캔버스 제목은 「<화면> 목업 4안」.
+     그리기 전에 연동을 확인한다: 이 세션에 `Artifact` 도구가 있고, `Artifact` list(`type: "Design System"`)에 규약의
+     주소가 보여야 한다. **둘 중 하나라도 아니면 조용히 로컬 HTML 로 바꾸지 말고 멈춰서** 사용자에게 무엇이 빠졌는지와
+     설정 순서를 안내한다:
+     1. Claude Code 를 claude.ai 계정(조직 계정)으로 로그인한다 — `/login`.
+     2. 조직 설정 Organization settings › Artifacts 에서 Artifacts · Design systems · Design 을 켠다(조직 소유자 몫).
+     3. 디자인 시스템이 아직 없으면 저장소에서 `/design-login` 뒤 `/design-sync` 로 부품을 올린다.
+     4. Claude 앱 Artifacts 페이지에서 Migrate team design systems 를 누른다(옛 claude.ai/design 에 있는 시스템을 옮긴다).
+     5. 디자인 시스템 주소를 저장소 목업 규약에 적는다.
+     그리고 묻는다: 「설정한 뒤 다시 할까요, 이번에는 로컬 HTML 로 할까요?」 사용자가 로컬을 고를 때만 아래로 간다.
+   - 규약이 디자인 시스템을 정하지 않았으면 → **로컬 HTML**: 규약이 정한 폴더, 없으면
+     `.claude/plans/<slug>/mockups/<화면>/` 에 `A.html`~`D.html` 과 `index.html`.
 4. **그린다.** 화면마다 `Agent`(general-purpose) 하나에 맡기고, 화면이 여럿이면 같은 응답 안에서 전부 띄운다(목업이
    이 세션의 문맥을 채우지 않게). 캔버스인데 서브에이전트에 `Artifact` 도구가 없으면 이 세션이 화면을 하나씩 그린다.
    프롬프트에 넣을 것:
