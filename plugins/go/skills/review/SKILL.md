@@ -30,6 +30,17 @@ argument-hint: "[--base <ref>] [--no-pr] [--merge] [집중 영역 한 문장]"
 
 ## 2. codex 리뷰
 
+**먼저 계정을 확인한다.** 저장소의 CLAUDE.md 또는 AGENTS.md 에 「codex 허용 계정」 줄(예: `codex 허용 계정: @example.com`)이
+있으면 그 도메인으로 이 스킬 폴더의 확인 스크립트를 돌린다.
+
+```bash
+python3 <이 스킬 폴더>/codex-account.py <허용 도메인>
+```
+
+종료 코드가 0 이 아니면(다른 도메인 1 · 확인 불가 2) **리뷰를 돌리지 말고 멈춰서** 사용자에게 알린다. 코드는 다른 계정으로
+보내지 않는다. 안내할 것: `codex logout` 뒤 허용 계정으로 `codex login`(Orca 세션이면 Orca 의 codex 계정 전환). 줄이 없으면
+이 확인은 건너뛴다.
+
 codex 플러그인의 companion 스크립트를 **직접** 실행한다(슬래시 명령 `/codex:review` 는 모델이 부를 수 없게
 막혀 있다. 그래서 이 스킬이 있다).
 
