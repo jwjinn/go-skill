@@ -294,6 +294,8 @@ claude plugin list               # go@skills-dir 가 보이면 된다
 - codex 모델은 `~/.codex/config.toml`(Orca 세션은 `$CODEX_HOME`)의 `model` 을 쓴다. 바꾸려면 companion 에 `--model` 을 넘긴다.
 - `/codex:rescue` 는 기본이 쓰기 모드다. 조사 용도로만 쓴다.
 - 새 훅 · 스킬 · 스크립트는 같은 실패가 두 번 기록된 뒤에만 만든다. 첫 번째는 기록 한 줄로 끝낸다.
+- 머지한 뒤에는 두 가지를 한다(어느 경로로 머지했든). squash 로 넣었으면 작업 브랜치 끝에 「squash 머지됨 — #번호(머지 커밋)」 빈 커밋을
+  남겨 push 하고, 기본 브랜치를 체크아웃한 워크트리를 `pull --ff-only` 로 맞춘다. 막히면 남의 변경을 stash 하지 않고 막는 파일을 보고한다.
 
 ---
 
@@ -320,6 +322,9 @@ claude plugin list               # go@skills-dir 가 보이면 된다
 
 2026-10-13 — 머지 전 검사를 기본 브랜치로 가는 PR 에서만 돌린다. 작업 브랜치는 빠르게 가고, 검사는 기본 브랜치에 들어갈 때
 한 번 한다. 같은 판정으로 `--merge` 는 기본 브랜치면 squash, 작업 브랜치끼리면 merge 커밋으로 머지하고, PR 은 `--base` 를 넘겨 연다.
+
+2026-10-13 — 머지 뒤 두 가지를 더했다. squash 머지한 작업 브랜치에 표시 커밋을 남기고(브랜치 `git log` 맨 위에서 머지됐음이 보인다),
+기본 브랜치를 체크아웃한 로컬 워크트리를 빨리 감기로 맞춘다.
 
 `plugins/` 아래의 예전 플러그인 넷은 지우지 않고 그대로 둔다. 마지막 활성 상태는 태그
 [`archive/go-chain-2026-10-10`](https://github.com/jwjinn/go-skill/tree/archive/go-chain-2026-10-10) 에 있다. `go` 를 쓰면서
