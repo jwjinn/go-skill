@@ -273,9 +273,25 @@ flowchart TD
 작업하는 저장소에 둘 것:
 
 ```json
-// .claude/settings.json — plan-gate 가 보는 자리
-{ "plansDirectory": ".claude/plans" }
+// .claude/settings.json
+{
+  "plansDirectory": ".claude/plans",
+  "extraKnownMarketplaces": {
+    "jwjinn-go-skill": { "source": { "source": "github", "repo": "jwjinn/go-skill" } },
+    "openai-codex":    { "source": { "source": "github", "repo": "openai/codex-plugin-cc" } }
+  },
+  "enabledPlugins": { "go@jwjinn-go-skill": true, "codex@openai-codex": true }
+}
 ```
+
+`plansDirectory` 는 plan-gate 가 계획 파일을 찾는 자리다. 나머지 두 키를 커밋해 두면, 다른 기계에서 저장소를 clone 하고
+Claude Code 에서 폴더를 신뢰했을 때 두 플러그인 설치를 제안한다. 위의 `/plugin` 명령을 사람마다 칠 필요가 없다.
+폴더를 신뢰하기 전에는 적용되지 않고, claude.ai/code 클라우드 세션에서는 이 키로 선언한 플러그인이 로드되지 않는다
+([설정 문서](https://code.claude.com/docs/en/settings)).
+
+codex 플러그인은 마켓플레이스로 설치해야 한다. `/go:review` 는 companion 을
+`~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs` 에서 찾으므로, `--plugin-dir` 이나 심링크로 건 codex 는
+찾지 못하고 리뷰가 멈춘다.
 
 ```markdown
 <!-- AGENTS.md 또는 CLAUDE.md — 리뷰를 보낼 계정 도메인을 정해 두고 싶을 때만. 다르면 /go:review 가 보낼지 묻는다 -->
@@ -284,15 +300,24 @@ codex 허용 계정: @example.com
 
 화면 목업을 캔버스로 받으려면 [캔버스 연동 설정](#캔버스-연동-설정)을 마친다.
 
+아래 도구는 설정으로 깔리지 않는다. 기계마다 준비한다.
+
 | 도구 | 구분 | 없으면 |
 |---|---|---|
 | `bash` · `git` | 필수 | plan-gate 가 계획 파일과 워크트리를 찾지 못한다 |
 | `jq` | 필수 | 게이트가 아무것도 보지 못한다. 통과하되 그 사실을 알린다 |
 | `python3` | 계정 표시에 필요 | 보고에 codex 계정이 「확인 불가」로 나온다. 리뷰는 그대로 돈다 |
-| `codex` CLI (ChatGPT 로그인) | 리뷰에 필요 | `/codex:setup` 이 설치와 로그인을 안내한다 |
+| `node` | 리뷰에 필요 | codex companion 을 띄우지 못해 리뷰가 돌지 않는다 |
+| `gh` | PR 에 필요 | `/go:review` 가 PR 을 만들지 못한다 |
+| `codex` CLI (ChatGPT 로그인) | 리뷰에 필요 | `/codex:setup` 이 설치와 로그인을 안내한다. 저장소가 허용 도메인을 정했으면 그 도메인 계정으로 로그인한다 |
 
 ⚠ `.claude/` 는 Claude Code 의 보호 경로다. `default`·`acceptEdits` 모드에서는 계획 파일을 쓸 때 확인창이 뜨고,
 `bypassPermissions` 에서는 허용된다.
+
+`plugins/go` 를 고쳐 배포할 때는 `plugins/go/.claude-plugin/plugin.json` 과 `.claude-plugin/marketplace.json` 의 `version` 을
+함께 올린다. `version` 을 정해 둔 플러그인은 그 값이 바뀔 때까지 사용자를 같은 버전에 묶어 두므로, 버전을 그대로 두고 push 하면
+다른 기계에 새 판이 들어가지 않는다([plugin.json 문서](https://code.claude.com/docs/en/plugins-reference#version)). 받는 쪽은
+`/plugin marketplace update jwjinn-go-skill` 로 갱신한다.
 
 개발 기계에서는 이 저장소를 심링크로 걸면 푸시 없이 바로 반영된다. 마켓플레이스 설치와 심링크를 동시에 두면 같은 훅이
 두 번 돈다. 하나만 둔다.
