@@ -126,7 +126,8 @@ plan_decision_lines() {
     }'
 }
 
-# plan_boxes_excluding_decisions <파일> <all|done> — 계획 **본문**의 체크박스 수.
+# plan_boxes_excluding_decisions <파일> <all|done|wait> — 계획 **본문**의 체크박스 수.
+#   wait = 배경 작업·사람을 기다리는 줄(`- [~] … 대기: <대상>`). 「대기:」가 없는 `[~]` 는 세지 않는다.
 #
 # ⚠⚠ 결정 절의 `- [ ] Q1 …` 을 「해야 할 단계」로 세면 안 된다(2026-09-03 리뷰가 지목).
 #   그러면 완주 게이트가 「다음 항목을 진행하고 [x] 로 닫아라」라고 지시하는데, 그 항목은
@@ -138,6 +139,7 @@ plan_boxes_excluding_decisions() {
     skip && /^##[[:space:]]/   { skip=0 }
     skip                       { next }
     want=="done" && /^[[:space:]]*[-*+][[:space:]]+\[[xX]\]/ { n++; next }
+    want=="wait" && /^[[:space:]]*[-*+][[:space:]]+\[~\].*대기:/ { n++; next }
     want=="all"  && /^[[:space:]]*[-*+][[:space:]]+\[.\]/    { n++ }
   END { print n+0 }' "$1" 2>/dev/null
 }
