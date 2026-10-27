@@ -145,6 +145,7 @@ flowchart TD
 sequenceDiagram
     actor 사람
     participant CC as Claude Code
+    participant SA as Sonnet 서브에이전트
     participant CV as 캔버스 (Claude 앱 Artifacts)
     participant DS as 디자인 시스템
 
@@ -153,13 +154,17 @@ sequenceDiagram
     CC->>DS: 규약의 디자인 시스템 확인
     CC->>CC: 로그인 계정 확인 · 초안에 캔버스 계정으로 적는다
     loop 화면마다
-        CC->>CV: 캔버스 하나 · A~D 아트보드 (실제 부품)
+        CC->>SA: 실측한 기능 목록 · 진입 경로 · 바뀌는 것
+        SA->>CV: 캔버스 하나 · A~D 아트보드 (실제 부품)
+        SA-->>CC: 링크 · 안마다 한 줄 요약 · 기능 목록별로 그린 아트보드 표
     end
     CC-->>사람: 캔버스 링크와 안마다 한 줄 요약
     사람->>CV: 직접 고치기 · 댓글 · 펜 메모
     사람->>CC: 「C 반영해」
-    CC->>CV: 아트보드와 댓글을 다시 읽는다
-    CC-->>사람: 바뀐 점 표 · 필요하면 캔버스 수정
+    CC->>SA: 캔버스 주소 · 아트보드 · 사용자가 한 말
+    SA->>CV: 아트보드와 댓글을 다시 읽고 필요하면 고친다
+    SA-->>CC: 바뀐 점 표
+    CC-->>사람: 바뀐 점 표
     사람->>CC: 화면마다 선택 (「C」)
     사람->>CC: /go:start
     CC->>CC: 로그인 계정을 캔버스 계정과 다시 대조한다
@@ -397,6 +402,10 @@ claude plugin list               # go@skills-dir 가 보이면 된다
 (배경 작업 · 사람을 기다리며 같은 답을 반복하던 것). `/go:plan` · `/go:start` 는 캔버스를 쓰거나 읽기 전에 로그인 계정을 대조한다
 (보조 계정에서 소유 계정의 캔버스가 「not found」였던 것). `/go:start` 에 실행 중 범위 추가 절과, 사용자가 캡처 · 문구로 결과를
 직접 지정한 화면 수정의 목업 예외를 더했다.
+
+2026-10-27 — 목업을 그리는 일과 「C 반영해」를 Sonnet 서브에이전트로 옮겼다(1.5.0). 계획 세션의 모델(Fable · Opus)은 기능 목록을
+실측해 넘기고, 서브에이전트가 돌려준 표에서 빠진 항목만 본다. 종전에는 서브에이전트가 부모 모델을 물려받아 그리기도 그 모델로
+돌았고, 반영은 계획 세션이 직접 했다. 서브에이전트에 `Artifact` 도구가 없으면 계획 세션이 대신 그리지 않고 멈춘다.
 
 `plugins/` 아래의 예전 플러그인 넷은 지우지 않고 그대로 둔다. 마지막 활성 상태는 태그
 [`archive/go-chain-2026-10-10`](https://github.com/jwjinn/go-skill/tree/archive/go-chain-2026-10-10) 에 있다. `go` 를 쓰면서
