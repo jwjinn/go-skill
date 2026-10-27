@@ -1,6 +1,6 @@
 ---
 name: review
-description: 구현이 끝난 뒤의 마무리 한 사이클을 한 번에 돈다 — codex 리뷰(민감 영역이면 adversarial 추가) → web 변경이면 AI 슬롭 스캔 → 확정 결함 반영 → 머지 전 검사(기본 브랜치로 가는 PR 만) → 커밋·PR. 리뷰어는 codex 하나다(Claude 토큰을 아끼려는 사용자 결정). 사용자가 「리뷰 돌려」「마무리해」「리뷰하고 PR 올려」「/go:review」라고 할 때 쓴다. /go:start 와 병렬 워커가 마무리 단계에서 부른다. 코드 작성 중에는 쓰지 않는다.
+description: 구현이 끝난 뒤의 마무리 한 사이클을 한 번에 돈다 — codex 적대적 리뷰(기본 · 일반 리뷰는 돌리지 않는다) → web 변경이면 AI 슬롭 스캔 → 확정 결함 반영 → 머지 전 검사(기본 브랜치로 가는 PR 만) → 커밋·PR. 리뷰어는 codex 하나다(Claude 토큰을 아끼려는 사용자 결정). 사용자가 「리뷰 돌려」「마무리해」「리뷰하고 PR 올려」「/go:review」라고 할 때 쓴다. /go:start 와 병렬 워커가 마무리 단계에서 부른다. 코드 작성 중에는 쓰지 않는다.
 argument-hint: "[--base <ref>] [--no-pr] [--merge] [집중 영역 한 문장]"
 ---
 
@@ -9,7 +9,7 @@ argument-hint: "[--base <ref>] [--no-pr] [--merge] [집중 영역 한 문장]"
 구현은 끝났다. 지금부터는 다른 눈으로 보고, 확정된 것만 고치고, 검사하고, 올린다.
 **한 단계에 한 사이클이다.** 반영한 뒤 다시 리뷰를 돌리지 않는다(반복 리뷰에서 좋은 결과를 얻지 못했다).
 인자 `$ARGUMENTS` 를 먼저 읽어라: `--base <ref>`(기본 `origin/main`) · `--no-pr`(PR 을 만들지 않는다) ·
-`--merge`(머지까지 · 기본 브랜치로 가면 squash, 아니면 merge 커밋) · 나머지 문장은 codex adversarial 리뷰의 집중 영역이다.
+`--merge`(머지까지 · 기본 브랜치로 가면 squash, 아니면 merge 커밋) · 나머지 문장은 적대적 리뷰의 집중 영역이다(없으면 2단계에서 만든다).
 
 ## 0. 범위
 
@@ -20,11 +20,11 @@ argument-hint: "[--base <ref>] [--no-pr] [--merge] [집중 영역 한 문장]"
   (없으면 `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`)로 얻는다. base 가 그 브랜치(`origin/<이름>` 또는
   `<이름>`)이고 `--no-pr` 가 아니면 「기본 브랜치로 가는 PR」이다. 작업 브랜치로 가는 PR 과 병렬 워커(`--no-pr --base <시작 커밋>`)는
   아니다. 이 판정이 6단계 검사와 7단계 머지 방식을 정한다.
-- 저장소에 `.claude/review-rules.md` 가 있으면 읽는다. 그 저장소의 함정·심각도 기준이고, 아래 두 리뷰의
+- 저장소에 `.claude/review-rules.md` 가 있으면 읽는다. 그 저장소의 함정·심각도 기준이고, 리뷰
   발견을 분류할 때 그 기준을 쓴다.
 - 변경 파일 목록에서 **민감 영역**을 가른다: 인증·인가·과금·마이그레이션·시크릿·컨테이너 권한
   (`auth|iam|login|session|billing|quota|migration|secret|credential|Dockerfile|securityContext|runAs` 가
-  경로나 diff 에 있으면). 하나라도 있으면 3단계의 adversarial 리뷰를 추가한다.
+  경로나 diff 에 있으면). 있으면 2단계의 집중 영역 문장에 그 영역을 넣는다.
 
 ## 1. 리뷰어는 codex 하나다
 
@@ -53,16 +53,19 @@ python3 <이 스킬 폴더>/codex-account.py [허용 도메인]
 codex 플러그인의 companion 스크립트를 **직접** 실행한다(슬래시 명령 `/codex:review` 는 모델이 부를 수 없게
 막혀 있다. 그래서 이 스킬이 있다).
 
+**리뷰는 적대적 리뷰(adversarial-review) 하나다.** 일반 리뷰(`review`)는 돌리지 않는다(2026-10-28 사용자 결정:
+「이젠 모든 리뷰를 그냥 적대적으로 하는 게 기본으로」). 적대적 리뷰는 「이 변경이 어떻게 깨지는가」를 찾게 해서, 일반 리뷰가
+놓치던 실패 경로 · 근거 없는 통과 · 대조군 없는 시험을 짚는다. 리뷰를 한 번만 돌리므로 codex 토큰도 한 번 분량이다.
+
 ```bash
 C=$(ls -d "$HOME"/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null | tail -1)
-node "$C" review --wait --base <base>
-```
-
-민감 영역이 있거나 집중 영역 문장이 주어졌으면 한 번 더:
-
-```bash
 node "$C" adversarial-review --wait --base <base> <집중 영역 문장>
 ```
+
+집중 영역 문장이 인자로 오지 않았으면 이 세션이 한 문장으로 만든다. 재료는 변경의 의도(계획 · 커밋 메시지 · PR 본문)와
+`git diff --stat` 이다. 이 변경이 지켜야 할 요구, 그 요구가 깨지는 경로(저장 · 미리보기 성공만으로 통과하는 길 · 늦은 응답 ·
+값 없음과 0 의 혼동 · 회귀), 0단계에서 가른 민감 영역, 시험이 기능을 실제로 검출하는지(대조군)를 넣는다. 만든 문장은
+보고 1번에 그대로 적는다.
 
 출력(`# Codex Review` 아래 `[P1]`·`[P2]`… 목록)을 그대로 받아 둔다. 스크립트가 없거나 「Reviewer failed」면
 **여기서 멈추고 사용자에게 묻는다** — codex 를 고쳐 다시 돌릴지, 이번만 `/code-review`(Claude · 토큰이 든다)로
